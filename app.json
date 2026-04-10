@@ -1,0 +1,29 @@
+{
+  "expo": {
+    "name": "Yewo",
+    "slug": "yewo",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "caisse",
+    "userInterfaceStyle": "light",
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#1a1a2e"
+      },
+      "package": "com.yewo.app",
+      "permissions": ["CAMERA"]
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "L'application a besoin de la caméra pour scanner les codes-barres."
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
