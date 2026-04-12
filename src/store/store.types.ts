@@ -69,7 +69,11 @@ export interface OrdersSlice {
   orders: Order[];
   getOrderForTable: (tableId: string) => Order | undefined;
   getOrdersForTable: (tableId: string) => Order[];
-  createOrder: (tableId: string | null, userId: string, options?: CreateOrderOptions) => Order;
+  createOrder: (
+    tableId: string | null,
+    userId: string,
+    options?: CreateOrderOptions
+  ) => Order;
   addItemToOrder: (orderId: string, product: Product) => void;
   updateItemQuantity: (orderId: string, itemId: string, quantity: number) => void;
   removeItem: (orderId: string, itemId: string) => void;
@@ -82,11 +86,17 @@ export interface OrdersSlice {
   ) => void;
 }
 
+export interface HydrationSlice {
+  isHydrating: boolean;
+  hydrateFromDb: () => Promise<void>;
+}
+
 export type AppState = AuthSlice &
   StaffSlice &
   SetupSlice &
   PlanSlice &
   DataSlice &
-  OrdersSlice;
+  OrdersSlice &
+  HydrationSlice;
 
 export type AppSliceCreator<TSlice> = StateCreator<AppState, [], [], TSlice>;

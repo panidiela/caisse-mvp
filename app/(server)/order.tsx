@@ -71,16 +71,16 @@ export default function OrderScreen() {
   const actualSourceType = order.sourceType || sourceType || 'free';
 
   const isOpen = order.status === 'open';
-  const isWaitingPayment = order.status === 'waiting_payment';
+  const isWaitingCashier = order.status === 'waiting_payment';
   const isPaid = order.status === 'paid';
   const isCancelled = order.status === 'cancelled';
-  const isLocked = isWaitingPayment || isPaid || isCancelled;
+  const isLocked = isWaitingCashier || isPaid || isCancelled;
 
   const getContextTitle = () => {
     if (actualSourceType === 'counter') return 'Comptoir';
     if (actualSourceType === 'zone') return zone?.name || 'Zone';
     if (actualSourceType === 'table') return table?.name || 'Table';
-    return 'Facture libre';
+    return 'Vente libre';
   };
 
   const getContextSubtitle = () => {
@@ -91,7 +91,7 @@ export default function OrderScreen() {
       return table?.name || 'Table';
     }
     if (establishment?.configuration.hasCounter) return 'Vente libre sans table';
-    return 'Facture libre';
+    return 'Vente libre';
   };
 
   const getSourceBadge = () => {
@@ -131,20 +131,39 @@ export default function OrderScreen() {
     });
   };
 
-  const handleRequestPayment = () => {
+  const handleShowNote = () => {
+    if (order.items.length === 0) {
+      Alert.alert('Note', 'Aucun article pour le moment.');
+      return;
+    }
+
+    const lines = order.items
+      .map(
+        (item) =>
+          `• ${item.productNameSnapshot} × ${item.quantity} = ${formatPrice(item.lineTotal)}`
+      )
+      .join('\n');
+
+    Alert.alert(
+      'Récapitulatif',
+      `${lines}\n\nTotal : ${formatPrice(order.total)}`
+    );
+  };
+
+  const handleMoneyReceived = () => {
     if (!isOpen) return;
 
     if (order.items.length === 0) {
       Alert.alert(
         'Vente vide',
-        'Ajoute au moins un produit avant de demander le paiement.'
+        'Ajoute au moins un produit avant de marquer l’argent comme reçu.'
       );
       return;
     }
 
     Alert.alert(
-      'Demander le paiement ?',
-      'La caisse verra cette vente comme prête à être encaissée.',
+      'Argent reçu ?',
+      'La vente sera signalée à la caisse comme argent reçu, en attente de validation finale.',
       [
         { text: 'Annuler', style: 'cancel' },
         {
@@ -156,7 +175,7 @@ export default function OrderScreen() {
   };
 
   const handleReopen = () => {
-    if (!isWaitingPayment) return;
+    if (!isWaitingCashier) return;
 
     Alert.alert(
       'Réouvrir la vente ?',
@@ -220,18 +239,20 @@ export default function OrderScreen() {
         <View style={[s.statusBanner, { backgroundColor: COLORS.primary }]}>
           <Text style={s.statusTitle}>En cours</Text>
           <Text style={s.statusText}>
-            La vente est encore modifiable. Ajoute les produits puis demande le paiement.
+            La vente est encore modifiable. La serveuse peut ajouter des produits
+            et montrer la note au client.
           </Text>
         </View>
       );
     }
 
-    if (isWaitingPayment) {
+    if (isWaitingCashier) {
       return (
         <View style={[s.statusBanner, { backgroundColor: COLORS.warning }]}>
-          <Text style={s.statusTitle}>Paiement demandé</Text>
+          <Text style={s.statusTitle}>Argent reçu · attente caisse</Text>
           <Text style={s.statusText}>
-            La vente est prête. La caisse doit maintenant l’encaisser.
+            La serveuse a indiqué que l’argent a été reçu. La caisse doit maintenant
+            valider officiellement le paiement.
           </Text>
         </View>
       );
@@ -329,7 +350,7 @@ export default function OrderScreen() {
             <Text style={s.emptySubtext}>Ajoute des produits à la vente</Text>
           </View>
         }
-        contentContainerStyle={{ paddingBottom: 180, flexGrow: 1 }}
+        contentContainerStyle={{ paddingBottom: 220, flexGrow: 1 }}
       />
 
       <View style={s.footer}>
@@ -337,6 +358,10 @@ export default function OrderScreen() {
           <Text style={s.totalLabel}>Total</Text>
           <Text style={s.totalAmount}>{formatPrice(order.total)}</Text>
         </View>
+
+        <TouchableOpacity style={s.noteBtn} onPress={handleShowNote}>
+          <Text style={s.noteBtnText}>Montrer la note</Text>
+        </TouchableOpacity>
 
         {isOpen && (
           <View style={s.actions}>
@@ -351,12 +376,12 @@ export default function OrderScreen() {
         )}
 
         {isOpen && order.items.length > 0 && (
-          <TouchableOpacity style={s.primaryBox} onPress={handleRequestPayment}>
-            <Text style={s.primaryBoxText}>Demander paiement</Text>
+          <TouchableOpacity style={s.primaryBox} onPress={handleMoneyReceived}>
+            <Text style={s.primaryBoxText}>Argent reçu</Text>
           </TouchableOpacity>
         )}
 
-        {isWaitingPayment && (
+        {isWaitingCashier && (
           <TouchableOpacity style={s.secondaryBox} onPress={handleReopen}>
             <Text style={s.secondaryBoxText}>Réouvrir la vente</Text>
           </TouchableOpacity>
@@ -364,7 +389,7 @@ export default function OrderScreen() {
 
         {isPaid && (
           <View style={s.successBox}>
-            <Text style={s.successBoxText}>Paiement confirmé</Text>
+            <Text style={s.successBoxText}>Paiement confirmé par la caisse</Text>
           </View>
         )}
       </View>
@@ -531,6 +556,19 @@ const s = StyleSheet.create({
     fontWeight: '800',
     color: COLORS.primary,
   },
+  noteBtn: {
+    backgroundColor: COLORS.bg,
+    borderRadius: RADIUS.md,
+    paddingVertical: 14,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  noteBtnText: {
+    color: COLORS.text,
+    fontWeight: '800',
+    fontSize: 15,
+  },
   actions: {
     flexDirection: 'row',
     gap: 10,
@@ -550,7 +588,7 @@ const s = StyleSheet.create({
     fontSize: 16,
   },
   primaryBox: {
-    backgroundColor: COLORS.primary,
+    backgroundColor: COLORS.warning,
     borderRadius: RADIUS.md,
     paddingVertical: 14,
     alignItems: 'center',

@@ -1,11 +1,9 @@
-
-import { useEffect, useState } from 'react';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { Stack } from 'expo-router';
 import { useStore } from '../src/store/useStore';
 
 export default function RootLayout() {
-  const initApp = useStore((s) => s.initApp);
   const [isReady, setIsReady] = useState(false);
 
   useEffect(() => {
@@ -13,7 +11,17 @@ export default function RootLayout() {
 
     const bootstrap = async () => {
       try {
-        await Promise.resolve(initApp());
+        const store = useStore.getState();
+
+        if (typeof store.initApp === 'function') {
+          await Promise.resolve(store.initApp());
+        }
+
+        if (typeof store.hydrateFromDb === 'function') {
+          await Promise.resolve(store.hydrateFromDb());
+        }
+      } catch (error) {
+        console.error('Root bootstrap failed', error);
       } finally {
         if (isMounted) {
           setIsReady(true);
@@ -26,12 +34,14 @@ export default function RootLayout() {
     return () => {
       isMounted = false;
     };
-  }, [initApp]);
+  }, []);
 
   if (!isReady) {
     return (
       <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" />
+        <ActivityIndicator size="large" color="#0f5b3a" />
+        <Text style={styles.title}>Yewo</Text>
+        <Text style={styles.subtitle}>Préparation de votre espace...</Text>
       </View>
     );
   }
@@ -53,6 +63,19 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#ffffff',
+    backgroundColor: '#f5f7fb',
+    padding: 24,
+  },
+  title: {
+    marginTop: 20,
+    fontSize: 34,
+    fontWeight: '800',
+    color: '#111827',
+  },
+  subtitle: {
+    marginTop: 8,
+    fontSize: 16,
+    color: '#6b7280',
+    textAlign: 'center',
   },
 });

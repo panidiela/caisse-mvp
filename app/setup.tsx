@@ -54,6 +54,7 @@ export default function SetupScreen() {
   const currentUser = useStore((s) => s.currentUser);
   const isSetupComplete = useStore((s) => s.isSetupComplete);
   const setupEstablishment = useStore((s) => s.setupEstablishment);
+  const loginWithCredentials = useStore((s) => s.loginWithCredentials);
 
   const [setupStep, setSetupStep] = useState<1 | 2 | 3>(1);
 
@@ -140,7 +141,7 @@ export default function SetupScreen() {
   }
 
   if (isSetupComplete) {
-    return <Redirect href="/login" />;
+    return <Redirect href="/(manager)/dashboard" />;
   }
 
   const updateZone = (index: number, patch: Partial<SetupZoneDraft>) => {
@@ -193,8 +194,11 @@ export default function SetupScreen() {
         role: employee.role,
       }));
 
+    const normalizedManagerIdentifier = managerIdentifier.trim().toLowerCase();
+    const normalizedManagerPin = managerPin.trim();
+
     const identifiers = [
-      managerIdentifier.trim().toLowerCase(),
+      normalizedManagerIdentifier,
       ...cleanedEmployees.map((employee) => employee.identifier),
     ];
 
@@ -245,22 +249,32 @@ export default function SetupScreen() {
       },
       manager: {
         name: managerName.trim(),
-        identifier: managerIdentifier.trim().toLowerCase(),
-        pin: managerPin.trim(),
+        identifier: normalizedManagerIdentifier,
+        pin: normalizedManagerPin,
         role: 'manager',
       },
       employees: cleanedEmployees,
       zones: normalizedZones,
     });
 
+    const loggedManager = loginWithCredentials(
+      normalizedManagerIdentifier,
+      normalizedManagerPin
+    );
+
     Alert.alert(
       'Configuration terminée',
-      'Votre établissement est prêt. Vous pouvez maintenant vous connecter.',
+      'Votre établissement est prêt. Le manager va maintenant accéder à son espace.',
       [
         {
           text: 'OK',
           onPress: () => {
-            router.replace('/login');
+            if (loggedManager) {
+              router.replace('/(manager)/dashboard');
+              return;
+            }
+
+            router.replace('/(manager)/dashboard');
           },
         },
       ]
@@ -553,7 +567,7 @@ export default function SetupScreen() {
                       onChangeText={(text) =>
                         updateEmployee(index, { identifier: text })
                       }
-                      placeholder="Ex: Laure"
+                      placeholder="Ex: laure"
                       autoCapitalize="none"
                       autoCorrect={false}
                       style={styles.input}

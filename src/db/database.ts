@@ -1,5 +1,5 @@
 import * as SQLite from 'expo-sqlite';
-import type { Order, Product, Table } from '../types';
+import type { Order, Product, Table, User, Zone } from '../types';
 import { MOCK_PRODUCTS, MOCK_TABLES } from '../data/mockData';
 
 const db = SQLite.openDatabaseSync('caisse.db');
@@ -87,6 +87,27 @@ function rowToOrder(row: any): Order {
   };
 }
 
+function rowToUser(row: any): User {
+  return {
+    id: row.id,
+    name: row.name,
+    identifier: row.identifier ?? '',
+    pin: row.pin ?? '',
+    role: row.role,
+    isActive: fromDbBoolean(row.isActive, true),
+    createdAt: row.createdAt ?? new Date().toISOString(),
+  };
+}
+
+function rowToZone(row: any): Zone {
+  return {
+    id: row.id,
+    name: row.name,
+    isActive: fromDbBoolean(row.isActive, true),
+    createdAt: row.createdAt ?? new Date().toISOString(),
+  };
+}
+
 function insertOrderItem(orderId: string, item: Order['items'][number]) {
   db.runSync(
     `INSERT INTO order_items
@@ -148,10 +169,25 @@ export function initDB() {
       lineTotal REAL NOT NULL,
       FOREIGN KEY (orderId) REFERENCES orders(id)
     );
+
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      role TEXT NOT NULL,
+      identifier TEXT,
+      pin TEXT,
+      isActive INTEGER NOT NULL DEFAULT 1,
+      createdAt TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS zones (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      isActive INTEGER NOT NULL DEFAULT 1,
+      createdAt TEXT
+    );
   `);
 
-  // Migration douce : on ajoute les colonnes APRÈS la création de base,
-  // pour supporter les anciennes DB déjà présentes sur le téléphone.
   ensureColumn('tables', 'zoneId', 'TEXT');
   ensureColumn('tables', 'isActive', 'INTEGER NOT NULL DEFAULT 1');
   ensureColumn('tables', 'createdAt', 'TEXT');
@@ -161,7 +197,14 @@ export function initDB() {
   ensureColumn('orders', 'zoneId', 'TEXT');
   ensureColumn('orders', 'sourceType', `TEXT NOT NULL DEFAULT 'counter'`);
 
-  // Les index ne sont créés qu'après les migrations de colonnes.
+  ensureColumn('users', 'identifier', 'TEXT');
+  ensureColumn('users', 'pin', 'TEXT');
+  ensureColumn('users', 'isActive', 'INTEGER NOT NULL DEFAULT 1');
+  ensureColumn('users', 'createdAt', 'TEXT');
+
+  ensureColumn('zones', 'isActive', 'INTEGER NOT NULL DEFAULT 1');
+  ensureColumn('zones', 'createdAt', 'TEXT');
+
   try {
     db.execSync(`
       CREATE INDEX IF NOT EXISTS idx_orders_tableId ON orders(tableId);
@@ -236,6 +279,30 @@ export function initDB() {
     } catch (error) {
       console.error('Failed to normalize existing products', error);
     }
+  }
+
+  try {
+    db.runSync(
+      `UPDATE users
+       SET isActive = COALESCE(isActive, 1),
+           createdAt = COALESCE(createdAt, ?)
+       WHERE createdAt IS NULL OR createdAt = ''`,
+      now
+    );
+  } catch (error) {
+    console.error('Failed to normalize existing users', error);
+  }
+
+  try {
+    db.runSync(
+      `UPDATE zones
+       SET isActive = COALESCE(isActive, 1),
+           createdAt = COALESCE(createdAt, ?)
+       WHERE createdAt IS NULL OR createdAt = ''`,
+      now
+    );
+  } catch (error) {
+    console.error('Failed to normalize existing zones', error);
   }
 }
 
@@ -404,5 +471,39 @@ export function updateOrder(order: Order) {
 
   for (const item of order.items) {
     insertOrderItem(order.id, item);
+  }
+}
+
+// =========================
+// USERS
+// =========================
+
+export function getUsers(): User[] {
+  try {
+    const rows = (db.getAllSync(
+      'SELECT * FROM users WHERE isActive = 1 ORDER BY name ASC'
+    ) ?? []) as any[];
+
+    return rows.map(rowToUser);
+  } catch (error) {
+    console.error('getUsers failed', error);
+    return [];
+  }
+}
+
+// =========================
+// ZONES
+// =========================
+
+export function getZones(): Zone[] {
+  try {
+    const rows = (db.getAllSync(
+      'SELECT * FROM zones WHERE isActive = 1 ORDER BY name ASC'
+    ) ?? []) as any[];
+
+    return rows.map(rowToZone);
+  } catch (error) {
+    console.error('getZones failed', error);
+    return [];
   }
 }
