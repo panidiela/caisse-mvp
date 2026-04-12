@@ -8,9 +8,9 @@ import {
   TextInput,
   Alert,
 } from 'react-native';
-import { Screen } from '../../src/components/ui/Screen';
-import { useStore } from '../../src/store/useStore';
-import { COLORS, RADIUS, SHADOW } from '../../src/constants/theme';
+import { Screen } from '../../../src/components/ui/Screen';
+import { useStore } from '../../../src/store/useStore';
+import { COLORS, RADIUS, SHADOW } from '../../../src/constants/theme';
 
 export default function TablesZonesConfig() {
   const {

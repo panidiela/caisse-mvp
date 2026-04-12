@@ -1,4 +1,6 @@
+
 import { useEffect, useState } from 'react';
+import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { Stack } from 'expo-router';
 import { useStore } from '../src/store/useStore';
 
@@ -27,20 +29,30 @@ export default function RootLayout() {
   }, [initApp]);
 
   if (!isReady) {
-    return null;
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" />
+      </View>
+    );
   }
 
   return (
     <Stack screenOptions={{ headerShown: false }}>
       <Stack.Screen name="index" />
-
-      {/* Zones */}
+      <Stack.Screen name="setup" />
+      <Stack.Screen name="login" />
       <Stack.Screen name="(server)" />
       <Stack.Screen name="(cashier)" />
       <Stack.Screen name="(manager)" />
-
-      {/* écran global */}
-      <Stack.Screen name="login" />
     </Stack>
   );
 }
+
+const styles = StyleSheet.create({
+  loadingContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#ffffff',
+  },
+});

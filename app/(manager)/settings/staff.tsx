@@ -9,7 +9,7 @@ import {
 } from 'react-native';
 import { useState } from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useStore } from '../../../src/store/useStore';
+import { useStore } from "../../../src/store/useStore";
 
 export default function StaffScreen() {
   const { users, addStaff, removeStaff } = useStore();

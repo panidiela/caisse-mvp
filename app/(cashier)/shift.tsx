@@ -6,9 +6,9 @@ import {
   ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useStore } from '../../../src/store/useStore';
-import { COLORS, RADIUS, SHADOW } from '../../../src/constants/theme';
-import { formatPrice } from '../../../src/utils/format';
+import { useStore } from "../../src/store/useStore";
+import { COLORS, RADIUS, SHADOW } from '../../src/constants/theme';
+import { formatPrice } from '../../src/utils/format';
 
 export default function ShiftsScreen() {
   const { shifts, users } = useStore();

@@ -1,11 +1,13 @@
 {
   "name": "yewo",
   "version": "1.0.0",
+  "private": true,
   "main": "expo-router/entry",
   "scripts": {
     "start": "expo start --dev-client",
+    "start:tunnel": "expo start --dev-client --tunnel",
     "android": "expo run:android",
-    "ios": "expo run:ios"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "1.23.1",

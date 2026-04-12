@@ -10,7 +10,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
-import { useStore } from '../../../src/store/useStore';
+import { useStore } from "../../../src/store/useStore";
 import { COLORS, RADIUS, SHADOW } from '../../../src/constants/theme';
 import { formatPrice } from '../../../src/utils/format';
 
