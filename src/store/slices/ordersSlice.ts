@@ -1,12 +1,27 @@
 import uuid from 'react-native-uuid';
+import * as DB from '../../db/database';
 import type { Order, OrderItem } from '../../types';
 import type { AppSliceCreator, CreateOrderOptions, OrdersSlice } from '../store.types';
 import {
-  getTableStatusFromOrders,
   isOrderClosed,
   recalcOrder,
   syncTablesWithOrders,
 } from '../helpers/order';
+
+function persistAndSync(set: any, get: any, nextOrders: Order[]) {
+  const nextTables = syncTablesWithOrders(get().tables, nextOrders);
+
+  set({
+    orders: nextOrders,
+    tables: nextTables,
+  });
+
+  try {
+    DB.replaceTables(nextTables);
+  } catch (error) {
+    console.error('DB replaceTables failed', error);
+  }
+}
 
 export const createOrdersSlice: AppSliceCreator<OrdersSlice> = (set, get) => ({
   orders: [],
@@ -43,8 +58,7 @@ export const createOrdersSlice: AppSliceCreator<OrdersSlice> = (set, get) => ({
 
   createOrder: (tableId, userId, options?: CreateOrderOptions) => {
     const now = new Date().toISOString();
-    const sourceType =
-      options?.sourceType ?? (tableId ? 'table' : 'counter');
+    const sourceType = options?.sourceType ?? (tableId ? 'table' : 'counter');
 
     const order: Order = {
       id: uuid.v4() as string,
@@ -61,15 +75,14 @@ export const createOrdersSlice: AppSliceCreator<OrdersSlice> = (set, get) => ({
       payment: null,
     };
 
-    set((state) => {
-      const nextOrders = [order, ...state.orders];
-      const nextTables = syncTablesWithOrders(state.tables, nextOrders);
+    try {
+      DB.createOrder(order);
+    } catch (error) {
+      console.error('DB createOrder failed', error);
+    }
 
-      return {
-        orders: nextOrders,
-        tables: nextTables,
-      };
-    });
+    const nextOrders = [order, ...get().orders];
+    persistAndSync(set, get, nextOrders);
 
     return order;
   },
@@ -123,13 +136,16 @@ export const createOrdersSlice: AppSliceCreator<OrdersSlice> = (set, get) => ({
       updatedAt: new Date().toISOString(),
     });
 
+    try {
+      DB.updateOrder(updatedOrder);
+    } catch (error) {
+      console.error('DB updateOrder(addItemToOrder) failed', error);
+    }
+
     const nextOrders = [...orders];
     nextOrders[orderIndex] = updatedOrder;
 
-    set((state) => ({
-      orders: nextOrders,
-      tables: syncTablesWithOrders(state.tables, nextOrders),
-    }));
+    persistAndSync(set, get, nextOrders);
   },
 
   updateItemQuantity: (orderId, itemId, quantity) => {
@@ -168,13 +184,16 @@ export const createOrdersSlice: AppSliceCreator<OrdersSlice> = (set, get) => ({
       updatedAt: new Date().toISOString(),
     });
 
+    try {
+      DB.updateOrder(updatedOrder);
+    } catch (error) {
+      console.error('DB updateOrder(updateItemQuantity) failed', error);
+    }
+
     const nextOrders = [...orders];
     nextOrders[orderIndex] = updatedOrder;
 
-    set((state) => ({
-      orders: nextOrders,
-      tables: syncTablesWithOrders(state.tables, nextOrders),
-    }));
+    persistAndSync(set, get, nextOrders);
   },
 
   removeItem: (orderId, itemId) => {
@@ -197,13 +216,16 @@ export const createOrdersSlice: AppSliceCreator<OrdersSlice> = (set, get) => ({
       updatedAt: new Date().toISOString(),
     };
 
+    try {
+      DB.updateOrder(updatedOrder);
+    } catch (error) {
+      console.error('DB updateOrder(setOrderStatus) failed', error);
+    }
+
     const nextOrders = [...orders];
     nextOrders[orderIndex] = updatedOrder;
 
-    set((state) => ({
-      orders: nextOrders,
-      tables: syncTablesWithOrders(state.tables, nextOrders),
-    }));
+    persistAndSync(set, get, nextOrders);
   },
 
   payOrder: (orderId, method, amountReceived, cashierUserId) => {
@@ -237,12 +259,15 @@ export const createOrdersSlice: AppSliceCreator<OrdersSlice> = (set, get) => ({
       },
     };
 
+    try {
+      DB.updateOrder(updatedOrder);
+    } catch (error) {
+      console.error('DB updateOrder(payOrder) failed', error);
+    }
+
     const nextOrders = [...orders];
     nextOrders[orderIndex] = updatedOrder;
 
-    set((state) => ({
-      orders: nextOrders,
-      tables: syncTablesWithOrders(state.tables, nextOrders),
-    }));
+    persistAndSync(set, get, nextOrders);
   },
 });

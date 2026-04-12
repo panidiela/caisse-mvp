@@ -1,15 +1,14 @@
-import React, { useMemo, useEffect } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import {
-  View,
+  Alert,
+  FlatList,
+  StyleSheet,
   Text,
   TouchableOpacity,
-  StyleSheet,
-  FlatList,
-  Alert,
+  View,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Screen } from '../../src/components/ui/Screen';
-import { Button } from '../../src/components/ui/Button';
 import { useStore } from '../../src/store/useStore';
 import { COLORS, RADIUS, SHADOW } from '../../src/constants/theme';
 import { formatPrice } from '../../src/utils/format';
@@ -33,8 +32,7 @@ export default function OrderScreen() {
     currentUser,
     updateItemQuantity,
     removeItem,
-    markOrderAsSent,
-    markMoneyCollected,
+    setOrderStatus,
     establishment,
   } = useStore();
 
@@ -45,7 +43,7 @@ export default function OrderScreen() {
     }
 
     if (!canAccessServer(currentUser)) {
-      Alert.alert('Accès refusé', 'Cet écran est réservé au service en salle.', [
+      Alert.alert('Accès refusé', 'Cet écran est réservé au service.', [
         { text: 'OK', onPress: () => router.replace('/') },
       ]);
     }
@@ -66,15 +64,17 @@ export default function OrderScreen() {
     [zones, zoneId]
   );
 
-  if (!currentUser || !canAccessServer(currentUser) || !order) return null;
+  if (!currentUser || !canAccessServer(currentUser) || !order) {
+    return null;
+  }
 
   const actualSourceType = order.sourceType || sourceType || 'free';
 
-  const isDraft = order.status === 'draft';
-  const isSent = order.status === 'sent';
-  const isMoneyCollected = order.status === 'money_collected';
+  const isOpen = order.status === 'open';
+  const isWaitingPayment = order.status === 'waiting_payment';
   const isPaid = order.status === 'paid';
-  const isLocked = isMoneyCollected || isPaid;
+  const isCancelled = order.status === 'cancelled';
+  const isLocked = isWaitingPayment || isPaid || isCancelled;
 
   const getContextTitle = () => {
     if (actualSourceType === 'counter') return 'Comptoir';
@@ -84,40 +84,28 @@ export default function OrderScreen() {
   };
 
   const getContextSubtitle = () => {
-    if (actualSourceType === 'counter') {
-      return 'Vente directe au comptoir';
-    }
-
-    if (actualSourceType === 'zone') {
-      return `Zone : ${zone?.name || 'Zone'}`;
-    }
-
+    if (actualSourceType === 'counter') return 'Vente directe au comptoir';
+    if (actualSourceType === 'zone') return `Zone : ${zone?.name || 'Zone'}`;
     if (actualSourceType === 'table') {
-      if (zone?.name) {
-        return `${table?.name || 'Table'} • ${zone.name}`;
-      }
+      if (zone?.name) return `${table?.name || 'Table'} • ${zone.name}`;
       return table?.name || 'Table';
     }
-
-    if (establishment?.configuration.hasCounter) {
-      return 'Vente libre sans table';
-    }
-
+    if (establishment?.configuration.hasCounter) return 'Vente libre sans table';
     return 'Facture libre';
   };
 
   const getSourceBadge = () => {
-    if (actualSourceType === 'counter') return '🧾 Comptoir';
-    if (actualSourceType === 'zone') return '📍 Zone';
-    if (actualSourceType === 'table') return '🪑 Table';
-    return '📄 Libre';
+    if (actualSourceType === 'counter') return 'Comptoir';
+    if (actualSourceType === 'zone') return 'Zone';
+    if (actualSourceType === 'table') return 'Table';
+    return 'Libre';
   };
 
   const handleAddProducts = () => {
-    if (!isDraft) {
+    if (!isOpen) {
       Alert.alert(
         'Modification impossible',
-        'On ne peut ajouter des produits que sur une facture en brouillon.'
+        'On ne peut ajouter des produits que sur une vente en cours.'
       );
       return;
     }
@@ -129,10 +117,10 @@ export default function OrderScreen() {
   };
 
   const handleScanBarcode = () => {
-    if (!isDraft) {
+    if (!isOpen) {
       Alert.alert(
         'Modification impossible',
-        'On ne peut scanner des produits que sur une facture en brouillon.'
+        'On ne peut scanner des produits que sur une vente en cours.'
       );
       return;
     }
@@ -143,53 +131,51 @@ export default function OrderScreen() {
     });
   };
 
-  const handleSendBill = () => {
-    if (!isDraft) return;
+  const handleRequestPayment = () => {
+    if (!isOpen) return;
 
     if (order.items.length === 0) {
-      Alert.alert('Facture vide', 'Ajoute au moins un produit avant d’envoyer la facture.');
+      Alert.alert(
+        'Vente vide',
+        'Ajoute au moins un produit avant de demander le paiement.'
+      );
       return;
     }
 
     Alert.alert(
-      'Envoyer la facture ?',
-      'La facture sera marquée comme envoyée au client.',
+      'Demander le paiement ?',
+      'La caisse verra cette vente comme prête à être encaissée.',
       [
         { text: 'Annuler', style: 'cancel' },
         {
           text: 'Confirmer',
-          onPress: () => {
-            markOrderAsSent(order.id);
-          },
+          onPress: () => setOrderStatus(order.id, 'waiting_payment'),
         },
       ]
     );
   };
 
-  const handleMarkMoneyCollected = () => {
-    if (!isSent) return;
+  const handleReopen = () => {
+    if (!isWaitingPayment) return;
 
     Alert.alert(
-      'Argent reçu ?',
-      'Cette action signale à la caisse que le client a remis l’argent.',
+      'Réouvrir la vente ?',
+      'Cela remet la vente en cours pour pouvoir la modifier.',
       [
         { text: 'Annuler', style: 'cancel' },
         {
           text: 'Confirmer',
-          onPress: () => {
-            markMoneyCollected(order.id, currentUser.id);
-            router.back();
-          },
+          onPress: () => setOrderStatus(order.id, 'open'),
         },
       ]
     );
   };
 
   const handleDecrease = (item: SaleItem) => {
-    if (!isDraft) {
+    if (!isOpen) {
       Alert.alert(
         'Modification impossible',
-        'Les quantités ne peuvent être modifiées qu’en brouillon.'
+        'Les quantités ne peuvent être modifiées que tant que la vente est en cours.'
       );
       return;
     }
@@ -198,10 +184,10 @@ export default function OrderScreen() {
   };
 
   const handleIncrease = (item: SaleItem) => {
-    if (!isDraft) {
+    if (!isOpen) {
       Alert.alert(
         'Modification impossible',
-        'Les quantités ne peuvent être modifiées qu’en brouillon.'
+        'Les quantités ne peuvent être modifiées que tant que la vente est en cours.'
       );
       return;
     }
@@ -210,10 +196,10 @@ export default function OrderScreen() {
   };
 
   const handleRemove = (item: SaleItem) => {
-    if (!isDraft) {
+    if (!isOpen) {
       Alert.alert(
         'Suppression impossible',
-        'Les produits ne peuvent être supprimés qu’en brouillon.'
+        'Les produits ne peuvent être supprimés que tant que la vente est en cours.'
       );
       return;
     }
@@ -229,45 +215,43 @@ export default function OrderScreen() {
   };
 
   const renderStatusBanner = () => {
-    if (isDraft) {
-      return (
-        <View style={[s.statusBanner, { backgroundColor: COLORS.occupied }]}>
-          <Text style={s.statusTitle}>📝 Brouillon</Text>
-          <Text style={s.statusText}>
-            La commande est encore modifiable. Ajoute les produits puis envoie la facture.
-          </Text>
-        </View>
-      );
-    }
-
-    if (isSent) {
-      return (
-        <View style={[s.statusBanner, { backgroundColor: COLORS.warning }]}>
-          <Text style={s.statusTitle}>⏳ Facture envoyée</Text>
-          <Text style={s.statusText}>
-            Le client a vu la facture. Dès que tu reçois l’argent, clique sur “Argent reçu”.
-          </Text>
-        </View>
-      );
-    }
-
-    if (isMoneyCollected) {
+    if (isOpen) {
       return (
         <View style={[s.statusBanner, { backgroundColor: COLORS.primary }]}>
-          <Text style={s.statusTitle}>💵 Argent reçu</Text>
+          <Text style={s.statusTitle}>En cours</Text>
           <Text style={s.statusText}>
-            La caisse doit maintenant valider officiellement le paiement.
+            La vente est encore modifiable. Ajoute les produits puis demande le paiement.
+          </Text>
+        </View>
+      );
+    }
+
+    if (isWaitingPayment) {
+      return (
+        <View style={[s.statusBanner, { backgroundColor: COLORS.warning }]}>
+          <Text style={s.statusTitle}>Paiement demandé</Text>
+          <Text style={s.statusText}>
+            La vente est prête. La caisse doit maintenant l’encaisser.
+          </Text>
+        </View>
+      );
+    }
+
+    if (isPaid) {
+      return (
+        <View style={[s.statusBanner, { backgroundColor: COLORS.success }]}>
+          <Text style={s.statusTitle}>Payée</Text>
+          <Text style={s.statusText}>
+            La caisse a validé officiellement le paiement.
           </Text>
         </View>
       );
     }
 
     return (
-      <View style={[s.statusBanner, { backgroundColor: COLORS.success }]}>
-        <Text style={s.statusTitle}>✅ Payée</Text>
-        <Text style={s.statusText}>
-          La caisse a validé officiellement le paiement.
-        </Text>
+      <View style={[s.statusBanner, { backgroundColor: COLORS.textLight }]}>
+        <Text style={s.statusTitle}>Annulée</Text>
+        <Text style={s.statusText}>Cette vente a été annulée.</Text>
       </View>
     );
   };
@@ -276,9 +260,7 @@ export default function OrderScreen() {
     <View style={s.item}>
       <View style={s.itemTop}>
         <View style={{ flex: 1 }}>
-          <Text style={s.itemName} numberOfLines={1}>
-            {item.productNameSnapshot}
-          </Text>
+          <Text style={s.itemName}>{item.productNameSnapshot}</Text>
           <Text style={s.itemPrice}>
             {formatPrice(item.unitPriceSnapshot)} × {item.quantity}
           </Text>
@@ -290,43 +272,50 @@ export default function OrderScreen() {
       {!isLocked && (
         <View style={s.itemActions}>
           <View style={s.qtyControls}>
-            <TouchableOpacity style={s.qtyBtn} onPress={() => handleDecrease(item)}>
+            <TouchableOpacity
+              style={s.qtyBtn}
+              onPress={() => handleDecrease(item)}
+            >
               <Text style={s.qtyBtnText}>−</Text>
             </TouchableOpacity>
 
             <Text style={s.qty}>{item.quantity}</Text>
 
-            <TouchableOpacity style={s.qtyBtn} onPress={() => handleIncrease(item)}>
+            <TouchableOpacity
+              style={s.qtyBtn}
+              onPress={() => handleIncrease(item)}
+            >
               <Text style={s.qtyBtnText}>+</Text>
             </TouchableOpacity>
           </View>
 
-          {isDraft && (
-            <TouchableOpacity onPress={() => handleRemove(item)}>
-              <Text style={s.removeText}>Supprimer</Text>
-            </TouchableOpacity>
-          )}
+          <TouchableOpacity onPress={() => handleRemove(item)}>
+            <Text style={s.removeText}>Supprimer</Text>
+          </TouchableOpacity>
         </View>
       )}
     </View>
   );
 
   return (
-    <Screen title={getContextTitle()} back>
+    <Screen title={getContextTitle()}>
       <FlatList
         data={order.items}
         keyExtractor={(i) => i.id}
         renderItem={renderItem}
         ListHeaderComponent={
-          <View style={{ padding: 16, gap: 12 }}>
+          <View style={{ padding: 16, gap: 14 }}>
             <View style={s.referenceCard}>
               <Text style={s.referenceLabel}>Référence</Text>
-              <Text style={s.referenceValue}>{order.reference}</Text>
+              <Text style={s.referenceValue}>
+                Vente #{order.id.slice(0, 8).toUpperCase()}
+              </Text>
 
               <View style={s.contextRow}>
                 <View style={s.badge}>
                   <Text style={s.badgeText}>{getSourceBadge()}</Text>
                 </View>
+
                 <Text style={s.contextSubtitle}>{getContextSubtitle()}</Text>
               </View>
             </View>
@@ -337,10 +326,10 @@ export default function OrderScreen() {
         ListEmptyComponent={
           <View style={s.empty}>
             <Text style={s.emptyText}>Aucun article</Text>
-            <Text style={s.emptySubtext}>Ajoute des produits à la facture</Text>
+            <Text style={s.emptySubtext}>Ajoute des produits à la vente</Text>
           </View>
         }
-        contentContainerStyle={{ paddingBottom: 140, flexGrow: 1 }}
+        contentContainerStyle={{ paddingBottom: 180, flexGrow: 1 }}
       />
 
       <View style={s.footer}>
@@ -349,51 +338,33 @@ export default function OrderScreen() {
           <Text style={s.totalAmount}>{formatPrice(order.total)}</Text>
         </View>
 
-        {isDraft && (
-          <>
-            <View style={s.actions}>
-              <Button
-                label="📷 Scanner"
-                onPress={handleScanBarcode}
-                variant="outline"
-                style={s.actionBtn}
-              />
-              <Button
-                label="+ Produits"
-                onPress={handleAddProducts}
-                variant="primary"
-                style={s.actionBtn}
-              />
-            </View>
+        {isOpen && (
+          <View style={s.actions}>
+            <TouchableOpacity style={s.bigActionBtn} onPress={handleAddProducts}>
+              <Text style={s.bigActionBtnText}>Produits</Text>
+            </TouchableOpacity>
 
-            {order.items.length > 0 && (
-              <Button
-                label="Envoyer la facture"
-                onPress={handleSendBill}
-                variant="secondary"
-                style={{ marginTop: 8 }}
-              />
-            )}
-          </>
-        )}
-
-        {isSent && (
-          <Button
-            label="💵 Argent reçu"
-            onPress={handleMarkMoneyCollected}
-            variant="success"
-          />
-        )}
-
-        {isMoneyCollected && (
-          <View style={s.badgeBox}>
-            <Text style={s.badgeBoxText}>Attente validation caisse</Text>
+            <TouchableOpacity style={s.bigActionBtn} onPress={handleScanBarcode}>
+              <Text style={s.bigActionBtnText}>Scanner</Text>
+            </TouchableOpacity>
           </View>
         )}
 
+        {isOpen && order.items.length > 0 && (
+          <TouchableOpacity style={s.primaryBox} onPress={handleRequestPayment}>
+            <Text style={s.primaryBoxText}>Demander paiement</Text>
+          </TouchableOpacity>
+        )}
+
+        {isWaitingPayment && (
+          <TouchableOpacity style={s.secondaryBox} onPress={handleReopen}>
+            <Text style={s.secondaryBoxText}>Réouvrir la vente</Text>
+          </TouchableOpacity>
+        )}
+
         {isPaid && (
-          <View style={[s.badgeBox, { backgroundColor: COLORS.success }]}>
-            <Text style={s.badgeBoxText}>Paiement confirmé</Text>
+          <View style={s.successBox}>
+            <Text style={s.successBoxText}>Paiement confirmé</Text>
           </View>
         )}
       </View>
@@ -408,26 +379,22 @@ const s = StyleSheet.create({
     padding: 14,
     ...SHADOW.sm,
   },
-
   referenceLabel: {
     fontSize: 12,
     fontWeight: '700',
     color: COLORS.textLight,
     textTransform: 'uppercase',
   },
-
   referenceValue: {
     marginTop: 4,
     fontSize: 18,
     fontWeight: '800',
     color: COLORS.text,
   },
-
   contextRow: {
     marginTop: 10,
     gap: 8,
   },
-
   badge: {
     alignSelf: 'flex-start',
     backgroundColor: COLORS.bg,
@@ -437,39 +404,33 @@ const s = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
   },
-
   badgeText: {
     color: COLORS.text,
     fontSize: 12,
     fontWeight: '800',
   },
-
   contextSubtitle: {
     fontSize: 13,
     color: COLORS.textLight,
     lineHeight: 18,
   },
-
   statusBanner: {
     borderRadius: RADIUS.lg,
     padding: 16,
     ...SHADOW.sm,
   },
-
   statusTitle: {
     color: '#fff',
     fontSize: 16,
     fontWeight: '800',
     marginBottom: 4,
   },
-
   statusText: {
     color: '#fff',
     fontSize: 14,
     lineHeight: 20,
     opacity: 0.95,
   },
-
   item: {
     backgroundColor: '#fff',
     borderRadius: RADIUS.md,
@@ -479,25 +440,21 @@ const s = StyleSheet.create({
     marginBottom: 10,
     ...SHADOW.sm,
   },
-
   itemTop: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     gap: 10,
   },
-
   itemName: {
     fontSize: 15,
     fontWeight: '700',
     color: COLORS.text,
   },
-
   itemPrice: {
     fontSize: 13,
     color: COLORS.textLight,
     marginTop: 2,
   },
-
   itemTotal: {
     fontSize: 16,
     fontWeight: '800',
@@ -505,19 +462,16 @@ const s = StyleSheet.create({
     minWidth: 90,
     textAlign: 'right',
   },
-
   itemActions: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
   },
-
   qtyControls: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
   },
-
   qtyBtn: {
     width: 32,
     height: 32,
@@ -526,42 +480,35 @@ const s = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-
   qtyBtnText: {
     fontSize: 18,
     fontWeight: '800',
     color: COLORS.text,
   },
-
   qty: {
     fontSize: 15,
     fontWeight: '700',
     color: COLORS.text,
   },
-
   removeText: {
     color: COLORS.danger,
     fontWeight: '700',
   },
-
   empty: {
     alignItems: 'center',
     justifyContent: 'center',
     paddingTop: 80,
   },
-
   emptyText: {
     fontSize: 18,
     fontWeight: '800',
     color: COLORS.text,
   },
-
   emptySubtext: {
     fontSize: 14,
     color: COLORS.textLight,
     marginTop: 6,
   },
-
   footer: {
     padding: 16,
     backgroundColor: '#fff',
@@ -569,42 +516,70 @@ const s = StyleSheet.create({
     borderTopColor: COLORS.border,
     gap: 10,
   },
-
   totalRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
   },
-
   totalLabel: {
     fontSize: 16,
     fontWeight: '700',
     color: COLORS.text,
   },
-
   totalAmount: {
     fontSize: 22,
     fontWeight: '800',
     color: COLORS.primary,
   },
-
   actions: {
     flexDirection: 'row',
     gap: 10,
   },
-
-  actionBtn: {
+  bigActionBtn: {
     flex: 1,
-  },
-
-  badgeBox: {
     backgroundColor: COLORS.primary,
     borderRadius: RADIUS.md,
-    paddingVertical: 12,
+    paddingVertical: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 56,
+  },
+  bigActionBtnText: {
+    color: '#fff',
+    fontWeight: '800',
+    fontSize: 16,
+  },
+  primaryBox: {
+    backgroundColor: COLORS.primary,
+    borderRadius: RADIUS.md,
+    paddingVertical: 14,
     alignItems: 'center',
   },
-
-  badgeBoxText: {
+  primaryBoxText: {
+    color: '#fff',
+    fontWeight: '800',
+    fontSize: 15,
+  },
+  secondaryBox: {
+    backgroundColor: COLORS.bg,
+    borderRadius: RADIUS.md,
+    paddingVertical: 14,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  secondaryBoxText: {
+    color: COLORS.text,
+    fontWeight: '800',
+    fontSize: 15,
+  },
+  successBox: {
+    backgroundColor: COLORS.success,
+    borderRadius: RADIUS.md,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  successBoxText: {
     color: '#fff',
     fontWeight: '800',
     fontSize: 15,

@@ -1,11 +1,11 @@
-import React, { useMemo, useEffect } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import {
-  View,
+  Alert,
+  ScrollView,
+  StyleSheet,
   Text,
   TouchableOpacity,
-  StyleSheet,
-  ScrollView,
-  Alert,
+  View,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Screen } from '../../src/components/ui/Screen';
@@ -16,8 +16,8 @@ import { SaleSourceType, Table, Zone } from '../../src/types';
 
 const STATUS_LABEL: Record<string, string> = {
   free: 'Libre',
-  occupied: 'Occupée',
-  attention: 'Attention',
+  occupied: 'En cours',
+  attention: 'Paiement demandé',
 };
 
 const STATUS_COLOR: Record<string, string> = {
@@ -45,25 +45,20 @@ export default function TablesScreen() {
     }
 
     if (!canAccessServer(currentUser)) {
-      Alert.alert('Accès refusé', 'Cet écran est réservé au service en salle.', [
+      Alert.alert('Accès refusé', 'Cet écran est réservé au service.', [
         { text: 'OK', onPress: () => router.replace('/') },
       ]);
     }
   }, [currentUser, router]);
 
-  if (!currentUser || !canAccessServer(currentUser) || !establishment) return null;
+  if (!currentUser || !canAccessServer(currentUser) || !establishment) {
+    return null;
+  }
 
   const config = establishment.configuration;
 
-  const activeZones = useMemo(
-    () => zones.filter((z) => z.isActive),
-    [zones]
-  );
-
-  const activeTables = useMemo(
-    () => tables.filter((t) => t.isActive),
-    [tables]
-  );
+  const activeZones = useMemo(() => zones.filter((z) => z.isActive), [zones]);
+  const activeTables = useMemo(() => tables.filter((t) => t.isActive), [tables]);
 
   const groupedTables = useMemo(() => {
     const result = activeZones
@@ -89,15 +84,21 @@ export default function TablesScreen() {
 
   const zoneCards = useMemo(() => {
     return activeZones.map((zone) => {
-      const zoneSales = orders.filter(
+      const activeSales = orders.filter(
         (o) =>
           o.zoneId === zone.id &&
+          o.sourceType === 'zone' &&
           !['paid', 'cancelled'].includes(o.status)
       );
 
+      const waitingCount = activeSales.filter(
+        (o) => o.status === 'waiting_payment'
+      ).length;
+
       return {
         ...zone,
-        activeSalesCount: zoneSales.length,
+        activeSalesCount: activeSales.length,
+        waitingCount,
       };
     });
   }, [activeZones, orders]);
@@ -165,23 +166,7 @@ export default function TablesScreen() {
       return;
     }
 
-    if (zoneOrders.length === 1) {
-      openOrder(zoneOrders[0].id, null, 'zone', zone.id);
-      return;
-    }
-
-    Alert.alert(
-      zone.name,
-      'Cette zone a plusieurs factures ouvertes. Pour l’instant, on ouvre la plus récente.',
-      [
-        {
-          text: 'OK',
-          onPress: () => {
-            openOrder(zoneOrders[0].id, null, 'zone', zone.id);
-          },
-        },
-      ]
-    );
+    openOrder(zoneOrders[0].id, null, 'zone', zone.id);
   };
 
   const handleCreateAdditionalZoneBill = (zone: Zone) => {
@@ -206,28 +191,12 @@ export default function TablesScreen() {
       return;
     }
 
-    if (activeOrders.length === 1) {
-      openOrder(activeOrders[0].id, table.id, 'table', table.zoneId);
-      return;
-    }
+    const latestOrder = [...activeOrders].sort(
+      (a, b) =>
+        new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+    )[0];
 
-    Alert.alert(
-      table.name,
-      'Cette table a plusieurs factures ouvertes. Pour l’instant, on ouvre la plus récente.',
-      [
-        {
-          text: 'OK',
-          onPress: () => {
-            const latestOrder = [...activeOrders].sort(
-              (a, b) =>
-                new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-            )[0];
-
-            openOrder(latestOrder.id, table.id, 'table', table.zoneId);
-          },
-        },
-      ]
-    );
+    openOrder(latestOrder.id, table.id, 'table', table.zoneId);
   };
 
   const handleCreateAdditionalBill = (table: Table) => {
@@ -251,7 +220,7 @@ export default function TablesScreen() {
 
         {!config.usesTables && !config.usesZones && (
           <TouchableOpacity style={s.quickCardSecondary} onPress={handleCreateFreeSale}>
-            <Text style={s.quickCardSecondaryTitle}>Nouvelle facture</Text>
+            <Text style={s.quickCardSecondaryTitle}>Nouvelle vente</Text>
             <Text style={s.quickCardSecondaryText}>
               Vente libre sans table ni zone
             </Text>
@@ -261,7 +230,9 @@ export default function TablesScreen() {
     );
   };
 
-  const renderZoneCard = (zone: Zone & { activeSalesCount: number }) => {
+  const renderZoneCard = (
+    zone: Zone & { activeSalesCount: number; waitingCount: number }
+  ) => {
     return (
       <TouchableOpacity
         key={zone.id}
@@ -270,13 +241,22 @@ export default function TablesScreen() {
         activeOpacity={0.85}
       >
         <Text style={s.zoneCardTitle}>{zone.name}</Text>
+
         <Text style={s.zoneCardText}>
           {zone.activeSalesCount === 0
-            ? 'Aucune facture ouverte'
+            ? 'Aucune vente ouverte'
             : zone.activeSalesCount === 1
-            ? '1 facture ouverte'
-            : `${zone.activeSalesCount} factures ouvertes`}
+            ? '1 vente ouverte'
+            : `${zone.activeSalesCount} ventes ouvertes`}
         </Text>
+
+        {zone.waitingCount > 0 && (
+          <Text style={s.zoneWarning}>
+            {zone.waitingCount === 1
+              ? '1 vente attend le paiement'
+              : `${zone.waitingCount} ventes attendent le paiement`}
+          </Text>
+        )}
 
         <View style={s.zoneCardActions}>
           <TouchableOpacity
@@ -292,7 +272,7 @@ export default function TablesScreen() {
             style={s.zoneNewBtn}
             onPress={() => handleCreateAdditionalZoneBill(zone)}
           >
-            <Text style={s.zoneNewBtnText}>+ Facture</Text>
+            <Text style={s.zoneNewBtnText}>+ Vente</Text>
           </TouchableOpacity>
         </View>
       </TouchableOpacity>
@@ -311,19 +291,29 @@ export default function TablesScreen() {
       >
         <View style={s.cardTop}>
           <Text style={s.tableName}>{table.name}</Text>
-          <View style={[s.statusDot, { backgroundColor: STATUS_COLOR[table.status] }]} />
+          <View
+            style={[
+              s.statusDot,
+              { backgroundColor: STATUS_COLOR[table.status] },
+            ]}
+          />
         </View>
 
-        <Text style={[s.statusLabel, { color: STATUS_COLOR[table.status] }]}>
+        <Text
+          style={[
+            s.statusLabel,
+            { color: STATUS_COLOR[table.status] },
+          ]}
+        >
           {STATUS_LABEL[table.status]}
         </Text>
 
         <Text style={s.billCount}>
           {activeOrders.length === 0
-            ? 'Aucune facture ouverte'
+            ? 'Aucune vente ouverte'
             : activeOrders.length === 1
-            ? '1 facture ouverte'
-            : `${activeOrders.length} factures ouvertes`}
+            ? '1 vente ouverte'
+            : `${activeOrders.length} ventes ouvertes`}
         </Text>
 
         <View style={s.cardActions}>
@@ -340,7 +330,7 @@ export default function TablesScreen() {
             style={s.newBillBtn}
             onPress={() => handleCreateAdditionalBill(table)}
           >
-            <Text style={s.newBillBtnText}>+ Facture</Text>
+            <Text style={s.newBillBtnText}>+ Vente</Text>
           </TouchableOpacity>
         </View>
       </TouchableOpacity>
@@ -348,23 +338,21 @@ export default function TablesScreen() {
   };
 
   const renderBody = () => {
-    // Cas 1 : ni zone ni table -> service libre pur
     if (!config.usesZones && !config.usesTables) {
       return (
         <View style={s.simpleModeBlock}>
           <Text style={s.simpleModeTitle}>Service libre</Text>
           <Text style={s.simpleModeText}>
-            Ici, les serveurs peuvent créer des factures librement sans table ni zone.
+            Ici, les serveurs peuvent créer des ventes librement sans table ni zone.
           </Text>
 
           <TouchableOpacity style={s.freeSaleBtn} onPress={handleCreateFreeSale}>
-            <Text style={s.freeSaleBtnText}>+ Nouvelle facture libre</Text>
+            <Text style={s.freeSaleBtnText}>+ Nouvelle vente libre</Text>
           </TouchableOpacity>
         </View>
       );
     }
 
-    // Cas 2 : zones sans tables
     if (config.usesZones && !config.usesTables) {
       return (
         <View style={s.zoneBlock}>
@@ -376,7 +364,6 @@ export default function TablesScreen() {
       );
     }
 
-    // Cas 3 : tables sans zones
     if (!config.usesZones && config.usesTables) {
       return (
         <View style={s.zoneBlock}>
@@ -388,7 +375,6 @@ export default function TablesScreen() {
       );
     }
 
-    // Cas 4 : zones + tables
     return (
       <>
         {groupedTables.length === 0 ? (
@@ -402,7 +388,6 @@ export default function TablesScreen() {
           groupedTables.map((group) => (
             <View key={group.zoneId} style={s.zoneBlock}>
               <Text style={s.sectionTitle}>{group.zoneName}</Text>
-
               <View style={s.grid}>
                 {group.tables.map((table) => renderTableCard(table))}
               </View>
@@ -432,13 +417,11 @@ const s = StyleSheet.create({
     gap: 20,
     paddingBottom: 32,
   },
-
   quickActions: {
     flexDirection: 'row',
     gap: 12,
     flexWrap: 'wrap',
   },
-
   quickCardPrimary: {
     flex: 1,
     minWidth: '47%',
@@ -447,7 +430,6 @@ const s = StyleSheet.create({
     padding: 16,
     ...SHADOW.md,
   },
-
   quickCardSecondary: {
     flex: 1,
     minWidth: '47%',
@@ -458,49 +440,41 @@ const s = StyleSheet.create({
     borderColor: COLORS.border,
     ...SHADOW.md,
   },
-
   quickCardTitle: {
     color: '#fff',
     fontSize: 17,
     fontWeight: '800',
   },
-
   quickCardText: {
     color: 'rgba(255,255,255,0.85)',
     fontSize: 13,
     marginTop: 4,
     lineHeight: 18,
   },
-
   quickCardSecondaryTitle: {
     color: COLORS.text,
     fontSize: 17,
     fontWeight: '800',
   },
-
   quickCardSecondaryText: {
     color: COLORS.textLight,
     fontSize: 13,
     marginTop: 4,
     lineHeight: 18,
   },
-
   sectionTitle: {
     fontSize: 18,
     fontWeight: '800',
     color: COLORS.text,
   },
-
   zoneBlock: {
     gap: 12,
   },
-
   zoneGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 12,
   },
-
   zoneCard: {
     width: '47%',
     backgroundColor: '#fff',
@@ -509,24 +483,25 @@ const s = StyleSheet.create({
     gap: 10,
     ...SHADOW.md,
   },
-
   zoneCardTitle: {
     fontSize: 17,
     fontWeight: '800',
     color: COLORS.text,
   },
-
   zoneCardText: {
     fontSize: 13,
     color: COLORS.textLight,
     minHeight: 36,
   },
-
+  zoneWarning: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: COLORS.warning,
+  },
   zoneCardActions: {
     flexDirection: 'row',
     gap: 8,
   },
-
   zoneOpenBtn: {
     flex: 1,
     backgroundColor: COLORS.primary,
@@ -534,13 +509,11 @@ const s = StyleSheet.create({
     paddingVertical: 10,
     alignItems: 'center',
   },
-
   zoneOpenBtnText: {
     color: '#fff',
     fontWeight: '800',
     fontSize: 12,
   },
-
   zoneNewBtn: {
     flex: 1,
     backgroundColor: COLORS.bg,
@@ -550,19 +523,16 @@ const s = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
   },
-
   zoneNewBtnText: {
     color: COLORS.text,
     fontWeight: '800',
     fontSize: 12,
   },
-
   grid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 12,
   },
-
   card: {
     width: '47%',
     backgroundColor: '#fff',
@@ -572,45 +542,38 @@ const s = StyleSheet.create({
     gap: 8,
     ...SHADOW.md,
   },
-
   cardTop: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
     gap: 8,
   },
-
   tableName: {
     flex: 1,
     fontSize: 17,
     fontWeight: '800',
     color: COLORS.text,
   },
-
   statusDot: {
     width: 14,
     height: 14,
     borderRadius: 999,
     marginTop: 4,
   },
-
   statusLabel: {
     fontSize: 13,
     fontWeight: '700',
   },
-
   billCount: {
     fontSize: 12,
     color: COLORS.textLight,
     minHeight: 32,
   },
-
   cardActions: {
     flexDirection: 'row',
     gap: 8,
     marginTop: 4,
   },
-
   openBtn: {
     flex: 1,
     backgroundColor: COLORS.primary,
@@ -618,13 +581,11 @@ const s = StyleSheet.create({
     paddingVertical: 10,
     alignItems: 'center',
   },
-
   openBtnText: {
     color: '#fff',
     fontWeight: '800',
     fontSize: 12,
   },
-
   newBillBtn: {
     flex: 1,
     backgroundColor: COLORS.bg,
@@ -634,13 +595,11 @@ const s = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
   },
-
   newBillBtnText: {
     color: COLORS.text,
     fontWeight: '800',
     fontSize: 12,
   },
-
   simpleModeBlock: {
     backgroundColor: '#fff',
     borderRadius: RADIUS.lg,
@@ -648,46 +607,39 @@ const s = StyleSheet.create({
     gap: 12,
     ...SHADOW.md,
   },
-
   simpleModeTitle: {
     fontSize: 20,
     fontWeight: '800',
     color: COLORS.text,
   },
-
   simpleModeText: {
     fontSize: 14,
     color: COLORS.textLight,
     lineHeight: 20,
   },
-
   freeSaleBtn: {
     backgroundColor: COLORS.primary,
     borderRadius: RADIUS.md,
     paddingVertical: 14,
     alignItems: 'center',
   },
-
   freeSaleBtnText: {
     color: '#fff',
     fontWeight: '800',
     fontSize: 16,
   },
-
   empty: {
     alignItems: 'center',
     justifyContent: 'center',
     paddingTop: 80,
     paddingHorizontal: 24,
   },
-
   emptyTitle: {
     fontSize: 18,
     fontWeight: '800',
     color: COLORS.text,
     textAlign: 'center',
   },
-
   emptyText: {
     marginTop: 8,
     fontSize: 14,

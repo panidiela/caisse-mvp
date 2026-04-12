@@ -1,17 +1,31 @@
-import { create } from 'zustand';
-import type { AppState } from './store.types';
-import { createAuthSlice } from './slices/authSlice';
-import { createStaffSlice } from './slices/staffSlice';
-import { createSetupSlice } from './slices/setupSlice';
-import { createPlanSlice } from './slices/planSlice';
-import { createDataSlice } from './slices/dataSlice';
-import { createOrdersSlice } from './slices/ordersSlice';
+hydrateFromDb: async () => {
+  const {
+    getTables,
+    getProducts,
+    getOrders,
+    getZones,
+    getUsers
+  } = await import('../db/database');
 
-export const useStore = create<AppState>()((...args) => ({
-  ...createAuthSlice(...args),
-  ...createStaffSlice(...args),
-  ...createSetupSlice(...args),
-  ...createPlanSlice(...args),
-  ...createDataSlice(...args),
-  ...createOrdersSlice(...args),
-}));
+  try {
+    const [tables, products, orders, zones, users] = await Promise.all([
+      getTables(),
+      getProducts(),
+      getOrders(),
+      getZones(),
+      getUsers(),
+    ]);
+
+    set({
+      tables,
+      products,
+      orders,
+      zones,
+      users,
+    });
+
+    console.log('Hydration OK');
+  } catch (e) {
+    console.error('Hydration failed', e);
+  }
+},
