@@ -1,16 +1,32 @@
 import React, { useMemo, useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, FlatList, Alert } from 'react-native';
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  StyleSheet,
+  FlatList,
+  Alert,
+} from 'react-native';
 import { useRouter } from 'expo-router';
 import { Screen } from '../../src/components/ui/Screen';
 import { useStore } from '../../src/store/useStore';
 import { COLORS, RADIUS, SHADOW } from '../../src/constants/theme';
 import { formatPrice, formatTime } from '../../src/utils/format';
-import { Order } from '../../src/types';
 import { canAccessCashier, canCreateCounterOrder } from '../../src/utils/access';
+import { Sale } from '../../src/types';
 
 export default function CaisseScreen() {
   const router = useRouter();
-  const { orders, currentUser, createOrder } = useStore();
+  const {
+    orders,
+    tables,
+    zones,
+    currentUser,
+    createOrder,
+    getOpenShiftForCashier,
+    establishment,
+  } = useStore();
+
   const [tab, setTab] = useState<'pending' | 'history'>('pending');
 
   useEffect(() => {
@@ -24,41 +40,120 @@ export default function CaisseScreen() {
         { text: 'OK', onPress: () => router.replace('/') },
       ]);
     }
-  }, [currentUser]);
+  }, [currentUser, router]);
 
-  if (!currentUser || !canAccessCashier(currentUser)) return null;
+  if (!currentUser || !canAccessCashier(currentUser) || !establishment) return null;
 
-  // 🔥 LISTES
-  const pending = useMemo(
-    () =>
-      orders
-        .filter((o) => o.status === 'waiting_payment' || o.status === 'open')
-        .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()),
-    [orders]
-  );
+  const config = establishment.configuration;
+  const openShift = getOpenShiftForCashier(currentUser.id);
 
-  const paid = useMemo(
-    () =>
-      orders
-        .filter((o) => o.status === 'paid')
-        .sort((a, b) => new Date(b.payment!.paidAt).getTime() - new Date(a.payment!.paidAt).getTime()),
-    [orders]
-  );
+  const pending = useMemo(() => {
+    return orders
+      .filter(
+        (o) =>
+          o.status === 'draft' ||
+          o.status === 'sent' ||
+          o.status === 'money_collected'
+      )
+      .sort(
+        (a, b) =>
+          new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+      );
+  }, [orders]);
 
-  // 🔥 ACTION : VENTE COMPTOIR
+  const paid = useMemo(() => {
+    return orders
+      .filter((o) => o.status === 'paid')
+      .sort((a, b) => {
+        const aDate = a.payment?.paidAt ?? a.updatedAt;
+        const bDate = b.payment?.paidAt ?? b.updatedAt;
+        return new Date(bDate).getTime() - new Date(aDate).getTime();
+      });
+  }, [orders]);
+
   const handleCounterSale = () => {
+    if (!openShift) {
+      Alert.alert(
+        'Shift requis',
+        'Ouvre d’abord ton shift de caisse avant de créer une vente comptoir.'
+      );
+      return;
+    }
+
     if (!canCreateCounterOrder(currentUser)) {
       Alert.alert('Accès refusé');
       return;
     }
 
-    const order = createOrder(null, currentUser.id);
+    const order = createOrder(null, currentUser.id, {
+      sourceType: 'counter',
+      zoneId: null,
+    });
 
     router.push({
       pathname: '/(server)/order',
       params: {
         orderId: order.id,
         tableId: '',
+        zoneId: '',
+        sourceType: 'counter',
+      },
+    });
+  };
+
+  const handleFreeSale = () => {
+    if (!openShift) {
+      Alert.alert(
+        'Shift requis',
+        'Ouvre d’abord ton shift de caisse avant de créer une vente libre.'
+      );
+      return;
+    }
+
+    const order = createOrder(null, currentUser.id, {
+      sourceType: 'free',
+      zoneId: null,
+    });
+
+    router.push({
+      pathname: '/(server)/order',
+      params: {
+        orderId: order.id,
+        tableId: '',
+        zoneId: '',
+        sourceType: 'free',
+      },
+    });
+  };
+
+  const handleOpenOrder = (item: Sale) => {
+    if (!openShift && item.status !== 'paid') {
+      Alert.alert(
+        'Shift requis',
+        'Ouvre d’abord ton shift de caisse avant de traiter des factures.'
+      );
+      return;
+    }
+
+    if (
+      item.status === 'paid' ||
+      item.status === 'sent' ||
+      item.status === 'money_collected'
+    ) {
+      router.push({
+        pathname: '/(cashier)/payment',
+        params: { orderId: item.id },
+      });
+      return;
+    }
+
+    router.push({
+      pathname: '/(server)/order',
+      params: {
+        orderId: item.id,
+        tableId: item.tableId ?? '',
+        zoneId: item.zoneId ?? '',
+        sourceType: item.sourceType,
       },
     });
   };
@@ -68,25 +163,50 @@ export default function CaisseScreen() {
     router.replace('/');
   };
 
-  const renderOrder = ({ item }: { item: Order }) => {
-    const isWaiting = item.status === 'waiting_payment';
-    const isPaid = item.status === 'paid';
+  const getStatusLabel = (status: string) => {
+    if (status === 'draft') return '📝 Brouillon';
+    if (status === 'sent') return '⏳ Envoyée';
+    if (status === 'money_collected') return '💵 Argent reçu';
+    if (status === 'paid') return '✅ Payée';
+    return '📄 Facture';
+  };
 
+  const getStatusColor = (status: string) => {
+    if (status === 'draft') return COLORS.occupied;
+    if (status === 'sent') return COLORS.warning;
+    if (status === 'money_collected') return COLORS.primary;
+    if (status === 'paid') return COLORS.success;
+    return COLORS.textLight;
+  };
+
+  const getSourceLabel = (order: Sale) => {
+    if (order.sourceType === 'counter') return '🧾 Comptoir';
+
+    if (order.sourceType === 'zone') {
+      const zone = zones.find((z) => z.id === order.zoneId);
+      return zone ? `📍 ${zone.name}` : '📍 Zone';
+    }
+
+    if (order.sourceType === 'table') {
+      const table = tables.find((t) => t.id === order.tableId);
+      return table ? `🪑 ${table.name}` : '🪑 Table';
+    }
+
+    return '📄 Libre';
+  };
+
+  const renderOrder = ({ item }: { item: Sale }) => {
     return (
       <TouchableOpacity
-        style={[s.card, isWaiting && s.cardWaiting, isPaid && s.cardPaid]}
-        onPress={() =>
-          router.push({
-            pathname: '/(cashier)/payment',
-            params: { orderId: item.id },
-          })
-        }
-        activeOpacity={0.8}
+        style={s.card}
+        onPress={() => handleOpenOrder(item)}
+        activeOpacity={0.85}
       >
         <View style={s.cardHeader}>
-          <Text style={s.cardTable}>
-            {item.tableId ? 'Commande table' : 'Comptoir'}
-          </Text>
+          <View style={{ flex: 1 }}>
+            <Text style={s.cardTitle}>{item.reference}</Text>
+            <Text style={s.cardSource}>{getSourceLabel(item)}</Text>
+          </View>
           <Text style={s.cardTime}>{formatTime(item.updatedAt)}</Text>
         </View>
 
@@ -95,21 +215,17 @@ export default function CaisseScreen() {
           <Text style={s.cardTotal}>{formatPrice(item.total)}</Text>
         </View>
 
-        <View
-          style={[
-            s.statusPill,
-            {
-              backgroundColor: isWaiting
-                ? COLORS.warning
-                : isPaid
-                ? COLORS.success
-                : COLORS.occupied,
-            },
-          ]}
-        >
-          <Text style={s.statusPillText}>
-            {isWaiting ? '⏳ Addition' : isPaid ? '✅ Payée' : '🍽️ En cours'}
-          </Text>
+        <View style={s.bottomRow}>
+          <View
+            style={[
+              s.statusPill,
+              { backgroundColor: getStatusColor(item.status) },
+            ]}
+          >
+            <Text style={s.statusPillText}>{getStatusLabel(item.status)}</Text>
+          </View>
+
+          <Text style={s.openHint}>Ouvrir ›</Text>
         </View>
       </TouchableOpacity>
     );
@@ -122,19 +238,36 @@ export default function CaisseScreen() {
       title={`Caisse · ${currentUser.name}`}
       rightAction={{ label: 'Déco', onPress: handleLogout }}
     >
-      {/* 🔥 BOUTON COMPTOIR */}
-      <TouchableOpacity style={s.counterBtn} onPress={handleCounterSale}>
-        <Text style={s.counterText}>+ Vente comptoir</Text>
-      </TouchableOpacity>
+      <View style={s.topActions}>
+        {config.hasCounter && (
+          <TouchableOpacity style={s.counterBtn} onPress={handleCounterSale}>
+            <Text style={s.counterText}>+ Vente comptoir</Text>
+          </TouchableOpacity>
+        )}
 
-      {/* TABS */}
+        {!config.usesTables && !config.usesZones && (
+          <TouchableOpacity style={s.freeBtn} onPress={handleFreeSale}>
+            <Text style={s.freeText}>+ Vente libre</Text>
+          </TouchableOpacity>
+        )}
+
+        <TouchableOpacity
+          style={[s.shiftBtn, openShift && s.shiftBtnOpen]}
+          onPress={() => router.push('/(cashier)/shift')}
+        >
+          <Text style={s.shiftText}>
+            {openShift ? 'Shift ouvert' : 'Gérer shift'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+
       <View style={s.tabs}>
         <TouchableOpacity
           style={[s.tab, tab === 'pending' && s.tabActive]}
           onPress={() => setTab('pending')}
         >
           <Text style={[s.tabText, tab === 'pending' && s.tabTextActive]}>
-            À encaisser ({pending.length})
+            À traiter ({pending.length})
           </Text>
         </TouchableOpacity>
 
@@ -157,7 +290,7 @@ export default function CaisseScreen() {
           <View style={s.empty}>
             <Text style={s.emptyText}>
               {tab === 'pending'
-                ? '🎉 Aucune commande'
+                ? '🎉 Aucune facture à traiter'
                 : '📋 Aucun historique'}
             </Text>
           </View>
@@ -168,18 +301,65 @@ export default function CaisseScreen() {
 }
 
 const s = StyleSheet.create({
+  topActions: {
+    flexDirection: 'row',
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    flexWrap: 'wrap',
+  },
+
   counterBtn: {
+    flexGrow: 1,
     backgroundColor: COLORS.primary,
-    margin: 16,
     padding: 16,
     borderRadius: RADIUS.lg,
     alignItems: 'center',
     ...SHADOW.md,
   },
+
   counterText: {
     color: '#fff',
     fontWeight: '800',
     fontSize: 16,
+  },
+
+  freeBtn: {
+    flexGrow: 1,
+    backgroundColor: '#fff',
+    padding: 16,
+    borderRadius: RADIUS.lg,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    ...SHADOW.md,
+  },
+
+  freeText: {
+    color: COLORS.text,
+    fontWeight: '800',
+    fontSize: 16,
+  },
+
+  shiftBtn: {
+    flexGrow: 1,
+    backgroundColor: COLORS.bg,
+    padding: 16,
+    borderRadius: RADIUS.lg,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+
+  shiftBtnOpen: {
+    backgroundColor: COLORS.success + '15',
+    borderColor: COLORS.success,
+  },
+
+  shiftText: {
+    color: COLORS.text,
+    fontWeight: '800',
+    fontSize: 15,
   },
 
   tabs: {
@@ -187,11 +367,28 @@ const s = StyleSheet.create({
     backgroundColor: '#fff',
     borderBottomWidth: 1,
     borderBottomColor: COLORS.border,
+    marginTop: 12,
   },
-  tab: { flex: 1, paddingVertical: 14, alignItems: 'center' },
-  tabActive: { borderBottomWidth: 3, borderBottomColor: COLORS.primary },
-  tabText: { color: COLORS.textLight, fontWeight: '700' },
-  tabTextActive: { color: COLORS.primary },
+
+  tab: {
+    flex: 1,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+
+  tabActive: {
+    borderBottomWidth: 3,
+    borderBottomColor: COLORS.primary,
+  },
+
+  tabText: {
+    color: COLORS.textLight,
+    fontWeight: '700',
+  },
+
+  tabTextActive: {
+    color: COLORS.primary,
+  },
 
   card: {
     backgroundColor: '#fff',
@@ -201,18 +398,22 @@ const s = StyleSheet.create({
     ...SHADOW.md,
   },
 
-  cardWaiting: {},
-  cardPaid: { opacity: 0.9 },
-
   cardHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+    gap: 12,
   },
 
-  cardTable: {
+  cardTitle: {
     fontSize: 16,
     fontWeight: '800',
     color: COLORS.text,
+  },
+
+  cardSource: {
+    fontSize: 13,
+    color: COLORS.textLight,
+    marginTop: 3,
   },
 
   cardTime: {
@@ -236,6 +437,12 @@ const s = StyleSheet.create({
     color: COLORS.primary,
   },
 
+  bottomRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+
   statusPill: {
     alignSelf: 'flex-start',
     borderRadius: 999,
@@ -247,6 +454,12 @@ const s = StyleSheet.create({
     color: '#fff',
     fontWeight: '800',
     fontSize: 12,
+  },
+
+  openHint: {
+    color: COLORS.textLight,
+    fontWeight: '700',
+    fontSize: 13,
   },
 
   empty: {
