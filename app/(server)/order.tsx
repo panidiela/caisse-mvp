@@ -1,625 +1,497 @@
-import React, { useEffect, useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Alert,
   FlatList,
+  Pressable,
+  SafeAreaView,
   StyleSheet,
   Text,
-  TouchableOpacity,
   View,
 } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
-import { Screen } from '../../src/components/ui/Screen';
+import { useLocalSearchParams, router } from 'expo-router';
 import { useStore } from '../../src/store/useStore';
-import { COLORS, RADIUS, SHADOW } from '../../src/constants/theme';
-import { formatPrice } from '../../src/utils/format';
-import { canAccessServer } from '../../src/utils/access';
-import { SaleItem, SaleSourceType } from '../../src/types';
+import type { CartLine, LocalSaleStatus } from '../../src/types/ui.types';
 
-export default function OrderScreen() {
-  const { orderId, tableId, zoneId, sourceType } = useLocalSearchParams<{
-    orderId: string;
-    tableId: string;
-    zoneId: string;
-    sourceType: SaleSourceType;
+type Product = {
+  id: string;
+  name: string;
+  price?: number;
+};
+
+type Sale = {
+  id: string;
+  tableId?: string | null;
+  sourceLabel?: string | null;
+  status: 'DRAFT' | 'SENT' | 'MONEY_COLLECTED' | 'PAID' | 'CANCELLED';
+  totalAmount: number;
+};
+
+export default function ServerOrderScreen() {
+  const params = useLocalSearchParams<{
+    tableId?: string;
+    zoneId?: string;
+    sourceType?: string;
+    sourceLabel?: string;
   }>();
 
-  const router = useRouter();
+  const currentUser = useStore((s) => s.currentUser);
+  const products = useStore((s) => (s.products ?? []) as Product[]);
+  const orders = useStore((s) => (s.orders ?? []) as Sale[]);
+  const createSale = useStore((s) => s.createSale);
+  const updateSaleStatus = useStore((s) => s.updateSaleStatus);
 
-  const {
-    orders,
-    tables,
-    zones,
-    currentUser,
-    updateItemQuantity,
-    removeItem,
-    setOrderStatus,
-    establishment,
-  } = useStore();
+  const [items, setItems] = useState<CartLine[]>([]);
+  const [status, setStatus] = useState<LocalSaleStatus>('DRAFT');
+  const [savedSaleId, setSavedSaleId] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!currentUser) {
-      router.replace('/');
-      return;
-    }
+  const sourceLabel =
+    typeof params.sourceLabel === 'string' && params.sourceLabel.length > 0
+      ? params.sourceLabel
+      : 'Commande';
 
-    if (!canAccessServer(currentUser)) {
-      Alert.alert('Accès refusé', 'Cet écran est réservé au service.', [
-        { text: 'OK', onPress: () => router.replace('/') },
-      ]);
-    }
-  }, [currentUser, router]);
-
-  const order = useMemo(
-    () => orders.find((o) => o.id === orderId),
-    [orders, orderId]
-  );
-
-  const table = useMemo(
-    () => tables.find((t) => t.id === tableId),
-    [tables, tableId]
-  );
-
-  const zone = useMemo(
-    () => zones.find((z) => z.id === zoneId),
-    [zones, zoneId]
-  );
-
-  if (!currentUser || !canAccessServer(currentUser) || !order) {
-    return null;
-  }
-
-  const actualSourceType = order.sourceType || sourceType || 'free';
-
-  const isOpen = order.status === 'open';
-  const isWaitingCashier = order.status === 'waiting_payment';
-  const isPaid = order.status === 'paid';
-  const isCancelled = order.status === 'cancelled';
-  const isLocked = isWaitingCashier || isPaid || isCancelled;
-
-  const getContextTitle = () => {
-    if (actualSourceType === 'counter') return 'Comptoir';
-    if (actualSourceType === 'zone') return zone?.name || 'Zone';
-    if (actualSourceType === 'table') return table?.name || 'Table';
-    return 'Vente libre';
-  };
-
-  const getContextSubtitle = () => {
-    if (actualSourceType === 'counter') return 'Vente directe au comptoir';
-    if (actualSourceType === 'zone') return `Zone : ${zone?.name || 'Zone'}`;
-    if (actualSourceType === 'table') {
-      if (zone?.name) return `${table?.name || 'Table'} • ${zone.name}`;
-      return table?.name || 'Table';
-    }
-    if (establishment?.configuration.hasCounter) return 'Vente libre sans table';
-    return 'Vente libre';
-  };
-
-  const getSourceBadge = () => {
-    if (actualSourceType === 'counter') return 'Comptoir';
-    if (actualSourceType === 'zone') return 'Zone';
-    if (actualSourceType === 'table') return 'Table';
-    return 'Libre';
-  };
-
-  const handleAddProducts = () => {
-    if (!isOpen) {
-      Alert.alert(
-        'Modification impossible',
-        'On ne peut ajouter des produits que sur une vente en cours.'
-      );
-      return;
-    }
-
-    router.push({
-      pathname: '/(server)/products',
-      params: { orderId },
-    });
-  };
-
-  const handleScanBarcode = () => {
-    if (!isOpen) {
-      Alert.alert(
-        'Modification impossible',
-        'On ne peut scanner des produits que sur une vente en cours.'
-      );
-      return;
-    }
-
-    router.push({
-      pathname: '/(server)/scan',
-      params: { orderId },
-    });
-  };
-
-  const handleShowNote = () => {
-    if (order.items.length === 0) {
-      Alert.alert('Note', 'Aucun article pour le moment.');
-      return;
-    }
-
-    const lines = order.items
-      .map(
-        (item) =>
-          `• ${item.productNameSnapshot} × ${item.quantity} = ${formatPrice(item.lineTotal)}`
-      )
-      .join('\n');
-
-    Alert.alert(
-      'Récapitulatif',
-      `${lines}\n\nTotal : ${formatPrice(order.total)}`
-    );
-  };
-
-  const handleMoneyReceived = () => {
-    if (!isOpen) return;
-
-    if (order.items.length === 0) {
-      Alert.alert(
-        'Vente vide',
-        'Ajoute au moins un produit avant de marquer l’argent comme reçu.'
-      );
-      return;
-    }
-
-    Alert.alert(
-      'Argent reçu ?',
-      'La vente sera signalée à la caisse comme argent reçu, en attente de validation finale.',
-      [
-        { text: 'Annuler', style: 'cancel' },
-        {
-          text: 'Confirmer',
-          onPress: () => setOrderStatus(order.id, 'waiting_payment'),
-        },
-      ]
-    );
-  };
-
-  const handleReopen = () => {
-    if (!isWaitingCashier) return;
-
-    Alert.alert(
-      'Réouvrir la vente ?',
-      'Cela remet la vente en cours pour pouvoir la modifier.',
-      [
-        { text: 'Annuler', style: 'cancel' },
-        {
-          text: 'Confirmer',
-          onPress: () => setOrderStatus(order.id, 'open'),
-        },
-      ]
-    );
-  };
-
-  const handleDecrease = (item: SaleItem) => {
-    if (!isOpen) {
-      Alert.alert(
-        'Modification impossible',
-        'Les quantités ne peuvent être modifiées que tant que la vente est en cours.'
-      );
-      return;
-    }
-
-    updateItemQuantity(order.id, item.id, item.quantity - 1);
-  };
-
-  const handleIncrease = (item: SaleItem) => {
-    if (!isOpen) {
-      Alert.alert(
-        'Modification impossible',
-        'Les quantités ne peuvent être modifiées que tant que la vente est en cours.'
-      );
-      return;
-    }
-
-    updateItemQuantity(order.id, item.id, item.quantity + 1);
-  };
-
-  const handleRemove = (item: SaleItem) => {
-    if (!isOpen) {
-      Alert.alert(
-        'Suppression impossible',
-        'Les produits ne peuvent être supprimés que tant que la vente est en cours.'
-      );
-      return;
-    }
-
-    Alert.alert('Supprimer ce produit ?', item.productNameSnapshot, [
-      { text: 'Annuler', style: 'cancel' },
-      {
-        text: 'Supprimer',
-        style: 'destructive',
-        onPress: () => removeItem(order.id, item.id),
-      },
-    ]);
-  };
-
-  const renderStatusBanner = () => {
-    if (isOpen) {
-      return (
-        <View style={[s.statusBanner, { backgroundColor: COLORS.primary }]}>
-          <Text style={s.statusTitle}>En cours</Text>
-          <Text style={s.statusText}>
-            La vente est encore modifiable. La serveuse peut ajouter des produits
-            et montrer la note au client.
-          </Text>
-        </View>
-      );
-    }
-
-    if (isWaitingCashier) {
-      return (
-        <View style={[s.statusBanner, { backgroundColor: COLORS.warning }]}>
-          <Text style={s.statusTitle}>Argent reçu · attente caisse</Text>
-          <Text style={s.statusText}>
-            La serveuse a indiqué que l’argent a été reçu. La caisse doit maintenant
-            valider officiellement le paiement.
-          </Text>
-        </View>
-      );
-    }
-
-    if (isPaid) {
-      return (
-        <View style={[s.statusBanner, { backgroundColor: COLORS.success }]}>
-          <Text style={s.statusTitle}>Payée</Text>
-          <Text style={s.statusText}>
-            La caisse a validé officiellement le paiement.
-          </Text>
-        </View>
-      );
-    }
+  const existingActiveSale = useMemo(() => {
+    if (!params.tableId || typeof params.tableId !== 'string') return null;
 
     return (
-      <View style={[s.statusBanner, { backgroundColor: COLORS.textLight }]}>
-        <Text style={s.statusTitle}>Annulée</Text>
-        <Text style={s.statusText}>Cette vente a été annulée.</Text>
-      </View>
+      orders.find(
+        (sale) =>
+          sale.tableId === params.tableId &&
+          sale.status !== 'PAID' &&
+          sale.status !== 'CANCELLED'
+      ) ?? null
+    );
+  }, [orders, params.tableId]);
+
+  const addToCart = (product: Product) => {
+    if (savedSaleId) {
+      Alert.alert(
+        'Commande verrouillée',
+        'Cette commande a déjà été enregistrée. Réinitialise pour repartir sur une nouvelle commande.'
+      );
+      return;
+    }
+
+    if (existingActiveSale && !savedSaleId) {
+      Alert.alert(
+        'Commande déjà en cours',
+        'Cette table a déjà une commande active. Pour l’instant, évite de recréer une nouvelle commande sur la même table.'
+      );
+      return;
+    }
+
+    setItems((prev) => {
+      const existing = prev.find((p) => p.id === product.id);
+
+      if (existing) {
+        return prev.map((p) =>
+          p.id === product.id ? { ...p, qty: p.qty + 1 } : p
+        );
+      }
+
+      return [
+        ...prev,
+        {
+          id: product.id,
+          productId: product.id,
+          name: product.name,
+          price: product.price ?? 0,
+          qty: 1,
+        },
+      ];
+    });
+  };
+
+  const decreaseQty = (productId: string) => {
+    if (savedSaleId) {
+      Alert.alert(
+        'Commande verrouillée',
+        'Cette commande a déjà été enregistrée. Réinitialise pour repartir sur une nouvelle commande.'
+      );
+      return;
+    }
+
+    setItems((prev) =>
+      prev
+        .map((item) =>
+          item.id === productId ? { ...item, qty: item.qty - 1 } : item
+        )
+        .filter((item) => item.qty > 0)
     );
   };
 
-  const renderItem = ({ item }: { item: SaleItem }) => (
-    <View style={s.item}>
-      <View style={s.itemTop}>
-        <View style={{ flex: 1 }}>
-          <Text style={s.itemName}>{item.productNameSnapshot}</Text>
-          <Text style={s.itemPrice}>
-            {formatPrice(item.unitPriceSnapshot)} × {item.quantity}
-          </Text>
-        </View>
-
-        <Text style={s.itemTotal}>{formatPrice(item.lineTotal)}</Text>
-      </View>
-
-      {!isLocked && (
-        <View style={s.itemActions}>
-          <View style={s.qtyControls}>
-            <TouchableOpacity
-              style={s.qtyBtn}
-              onPress={() => handleDecrease(item)}
-            >
-              <Text style={s.qtyBtnText}>−</Text>
-            </TouchableOpacity>
-
-            <Text style={s.qty}>{item.quantity}</Text>
-
-            <TouchableOpacity
-              style={s.qtyBtn}
-              onPress={() => handleIncrease(item)}
-            >
-              <Text style={s.qtyBtnText}>+</Text>
-            </TouchableOpacity>
-          </View>
-
-          <TouchableOpacity onPress={() => handleRemove(item)}>
-            <Text style={s.removeText}>Supprimer</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-    </View>
+  const total = useMemo(
+    () => items.reduce((sum, item) => sum + item.price * item.qty, 0),
+    [items]
   );
 
-  return (
-    <Screen title={getContextTitle()}>
-      <FlatList
-        data={order.items}
-        keyExtractor={(i) => i.id}
-        renderItem={renderItem}
-        ListHeaderComponent={
-          <View style={{ padding: 16, gap: 14 }}>
-            <View style={s.referenceCard}>
-              <Text style={s.referenceLabel}>Référence</Text>
-              <Text style={s.referenceValue}>
-                Vente #{order.id.slice(0, 8).toUpperCase()}
-              </Text>
+  const canSend =
+    items.length > 0 &&
+    status === 'DRAFT' &&
+    !savedSaleId &&
+    !existingActiveSale;
 
-              <View style={s.contextRow}>
-                <View style={s.badge}>
-                  <Text style={s.badgeText}>{getSourceBadge()}</Text>
+  const canMarkMoneyCollected = savedSaleId !== null && status === 'SENT';
+
+  const handleShowToCustomer = () => {
+    if (!canSend || !currentUser) return;
+
+    const saleId = createSale({
+      tableId:
+        typeof params.tableId === 'string' && params.tableId.length > 0
+          ? params.tableId
+          : null,
+      zoneId:
+        typeof params.zoneId === 'string' && params.zoneId.length > 0
+          ? params.zoneId
+          : null,
+      sourceType:
+        (typeof params.sourceType === 'string' && params.sourceType) || 'free',
+      sourceLabel,
+      serverId: currentUser.id,
+      shiftId: null,
+      status: 'SENT',
+      items: items.map((item) => ({
+        productId: item.productId || item.id,
+        productName: item.name,
+        unitPrice: item.price,
+        quantity: item.qty,
+        total: item.qty * item.price,
+      })),
+    });
+
+    if (!saleId) {
+      Alert.alert('Erreur', "Impossible d'enregistrer la vente.");
+      return;
+    }
+
+    setSavedSaleId(saleId);
+    setStatus('SENT');
+
+    Alert.alert(
+      'Commande enregistrée',
+      'La commande a été enregistrée et montrée au client.'
+    );
+  };
+
+  const handleMoneyCollected = () => {
+    if (!canMarkMoneyCollected || !savedSaleId) return;
+
+    try {
+      updateSaleStatus(savedSaleId, 'MONEY_COLLECTED');
+      setStatus('MONEY_COLLECTED');
+
+      Alert.alert(
+        'Argent reçu',
+        "La vente est maintenant en attente de validation par la caissière."
+      );
+    } catch (error) {
+      console.error('handleMoneyCollected failed', error);
+      Alert.alert('Erreur', "Impossible de mettre à jour le statut de la vente.");
+    }
+  };
+
+  const handleBack = () => {
+    router.back();
+  };
+
+  const handleReset = () => {
+    setItems([]);
+    setStatus('DRAFT');
+    setSavedSaleId(null);
+  };
+
+  return (
+    <SafeAreaView style={styles.safeArea}>
+      <View style={styles.container}>
+        <Pressable onPress={handleBack} style={styles.backButton}>
+          <Text style={styles.backButtonText}>← Retour</Text>
+        </Pressable>
+
+        <Text style={styles.title}>{sourceLabel}</Text>
+        <Text style={styles.subtitle}>
+          État actuel : <Text style={styles.statusValue}>{status}</Text>
+        </Text>
+
+        {existingActiveSale && !savedSaleId && (
+          <View style={styles.warningCard}>
+            <Text style={styles.warningTitle}>Commande déjà en cours</Text>
+            <Text style={styles.warningText}>
+              Cette table a déjà une commande active.
+            </Text>
+            <Text style={styles.warningText}>
+              Statut : <Text style={styles.warningValue}>{existingActiveSale.status}</Text>
+            </Text>
+            <Text style={styles.warningText}>
+              Total : <Text style={styles.warningValue}>{existingActiveSale.totalAmount} FCFA</Text>
+            </Text>
+          </View>
+        )}
+
+        <Text style={styles.sectionTitle}>Produits</Text>
+
+        <FlatList
+          data={products}
+          keyExtractor={(item) => item.id}
+          horizontal
+          contentContainerStyle={styles.productsList}
+          renderItem={({ item }) => (
+            <Pressable style={styles.productCard} onPress={() => addToCart(item)}>
+              <Text style={styles.productName}>{item.name}</Text>
+              <Text style={styles.productPrice}>{item.price ?? 0} FCFA</Text>
+            </Pressable>
+          )}
+        />
+
+        <Text style={styles.sectionTitle}>Commande</Text>
+
+        {items.length === 0 ? (
+          <Text style={styles.emptyText}>Aucun produit ajouté.</Text>
+        ) : (
+          <View style={styles.itemsContainer}>
+            {items.map((item) => (
+              <View key={item.id} style={styles.itemRow}>
+                <View style={styles.itemInfo}>
+                  <Text style={styles.itemName}>{item.name}</Text>
+                  <Text style={styles.itemMeta}>
+                    {item.qty} × {item.price} FCFA
+                  </Text>
                 </View>
 
-                <Text style={s.contextSubtitle}>{getContextSubtitle()}</Text>
+                <View style={styles.itemActions}>
+                  <Pressable
+                    style={styles.qtyButton}
+                    onPress={() => decreaseQty(item.id)}
+                  >
+                    <Text style={styles.qtyButtonText}>−</Text>
+                  </Pressable>
+
+                  <Text style={styles.itemTotal}>{item.qty * item.price} FCFA</Text>
+                </View>
               </View>
-            </View>
-
-            {renderStatusBanner()}
+            ))}
           </View>
-        }
-        ListEmptyComponent={
-          <View style={s.empty}>
-            <Text style={s.emptyText}>Aucun article</Text>
-            <Text style={s.emptySubtext}>Ajoute des produits à la vente</Text>
-          </View>
-        }
-        contentContainerStyle={{ paddingBottom: 220, flexGrow: 1 }}
-      />
+        )}
 
-      <View style={s.footer}>
-        <View style={s.totalRow}>
-          <Text style={s.totalLabel}>Total</Text>
-          <Text style={s.totalAmount}>{formatPrice(order.total)}</Text>
+        <View style={styles.totalRow}>
+          <Text style={styles.totalLabel}>Total</Text>
+          <Text style={styles.totalValue}>{total} FCFA</Text>
         </View>
 
-        <TouchableOpacity style={s.noteBtn} onPress={handleShowNote}>
-          <Text style={s.noteBtnText}>Montrer la note</Text>
-        </TouchableOpacity>
+        <Pressable
+          style={[styles.primaryButton, !canSend && styles.buttonDisabled]}
+          onPress={handleShowToCustomer}
+          disabled={!canSend}
+        >
+          <Text style={styles.primaryButtonText}>Afficher au client</Text>
+        </Pressable>
 
-        {isOpen && (
-          <View style={s.actions}>
-            <TouchableOpacity style={s.bigActionBtn} onPress={handleAddProducts}>
-              <Text style={s.bigActionBtnText}>Produits</Text>
-            </TouchableOpacity>
+        <Pressable
+          style={[
+            styles.secondaryButton,
+            !canMarkMoneyCollected && styles.buttonDisabled,
+          ]}
+          onPress={handleMoneyCollected}
+          disabled={!canMarkMoneyCollected}
+        >
+          <Text style={styles.secondaryButtonText}>Argent reçu</Text>
+        </Pressable>
 
-            <TouchableOpacity style={s.bigActionBtn} onPress={handleScanBarcode}>
-              <Text style={s.bigActionBtnText}>Scanner</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {isOpen && order.items.length > 0 && (
-          <TouchableOpacity style={s.primaryBox} onPress={handleMoneyReceived}>
-            <Text style={s.primaryBoxText}>Argent reçu</Text>
-          </TouchableOpacity>
-        )}
-
-        {isWaitingCashier && (
-          <TouchableOpacity style={s.secondaryBox} onPress={handleReopen}>
-            <Text style={s.secondaryBoxText}>Réouvrir la vente</Text>
-          </TouchableOpacity>
-        )}
-
-        {isPaid && (
-          <View style={s.successBox}>
-            <Text style={s.successBoxText}>Paiement confirmé par la caisse</Text>
-          </View>
-        )}
+        <Pressable style={styles.resetButton} onPress={handleReset}>
+          <Text style={styles.resetButtonText}>Réinitialiser cette commande</Text>
+        </Pressable>
       </View>
-    </Screen>
+    </SafeAreaView>
   );
 }
 
-const s = StyleSheet.create({
-  referenceCard: {
-    backgroundColor: '#fff',
-    borderRadius: RADIUS.md,
-    padding: 14,
-    ...SHADOW.sm,
+const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: '#f5f7fb',
   },
-  referenceLabel: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: COLORS.textLight,
-    textTransform: 'uppercase',
+  container: {
+    flex: 1,
+    padding: 20,
   },
-  referenceValue: {
-    marginTop: 4,
-    fontSize: 18,
-    fontWeight: '800',
-    color: COLORS.text,
-  },
-  contextRow: {
-    marginTop: 10,
-    gap: 8,
-  },
-  badge: {
+  backButton: {
     alignSelf: 'flex-start',
-    backgroundColor: COLORS.bg,
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderWidth: 1,
-    borderColor: COLORS.border,
+    paddingVertical: 8,
   },
-  badgeText: {
-    color: COLORS.text,
-    fontSize: 12,
+  backButtonText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#3730a3',
+  },
+  title: {
+    marginTop: 4,
+    fontSize: 24,
     fontWeight: '800',
+    color: '#111827',
   },
-  contextSubtitle: {
-    fontSize: 13,
-    color: COLORS.textLight,
-    lineHeight: 18,
+  subtitle: {
+    marginTop: 8,
+    fontSize: 15,
+    color: '#6b7280',
   },
-  statusBanner: {
-    borderRadius: RADIUS.lg,
+  statusValue: {
+    fontWeight: '800',
+    color: '#111827',
+  },
+  warningCard: {
+    marginTop: 16,
+    backgroundColor: '#fff7ed',
+    borderRadius: 16,
     padding: 16,
-    ...SHADOW.sm,
+    borderWidth: 1,
+    borderColor: '#fdba74',
   },
-  statusTitle: {
-    color: '#fff',
+  warningTitle: {
     fontSize: 16,
     fontWeight: '800',
-    marginBottom: 4,
+    color: '#9a3412',
+    marginBottom: 8,
   },
-  statusText: {
-    color: '#fff',
+  warningText: {
+    marginTop: 4,
     fontSize: 14,
-    lineHeight: 20,
-    opacity: 0.95,
+    color: '#9a3412',
   },
-  item: {
-    backgroundColor: '#fff',
-    borderRadius: RADIUS.md,
+  warningValue: {
+    fontWeight: '800',
+  },
+  sectionTitle: {
+    marginTop: 20,
+    marginBottom: 12,
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#111827',
+  },
+  productsList: {
+    gap: 10,
+  },
+  productCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
     padding: 14,
-    gap: 8,
-    marginHorizontal: 16,
-    marginBottom: 10,
-    ...SHADOW.sm,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    minWidth: 120,
   },
-  itemTop: {
+  productName: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#111827',
+  },
+  productPrice: {
+    marginTop: 6,
+    fontSize: 13,
+    color: '#6b7280',
+  },
+  emptyText: {
+    fontSize: 14,
+    color: '#6b7280',
+  },
+  itemsContainer: {
+    gap: 10,
+  },
+  itemRow: {
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
     flexDirection: 'row',
     justifyContent: 'space-between',
-    gap: 10,
+    alignItems: 'center',
+  },
+  itemInfo: {
+    flex: 1,
+    marginRight: 12,
   },
   itemName: {
     fontSize: 15,
     fontWeight: '700',
-    color: COLORS.text,
+    color: '#111827',
   },
-  itemPrice: {
+  itemMeta: {
+    marginTop: 4,
     fontSize: 13,
-    color: COLORS.textLight,
-    marginTop: 2,
-  },
-  itemTotal: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: COLORS.primary,
-    minWidth: 90,
-    textAlign: 'right',
+    color: '#6b7280',
   },
   itemActions: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'flex-end',
   },
-  qtyControls: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  qtyBtn: {
+  qtyButton: {
     width: 32,
     height: 32,
-    borderRadius: 999,
-    backgroundColor: COLORS.bg,
+    borderRadius: 10,
+    backgroundColor: '#eef2ff',
     alignItems: 'center',
     justifyContent: 'center',
+    marginBottom: 6,
   },
-  qtyBtnText: {
+  qtyButtonText: {
     fontSize: 18,
     fontWeight: '800',
-    color: COLORS.text,
+    color: '#3730a3',
   },
-  qty: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: COLORS.text,
-  },
-  removeText: {
-    color: COLORS.danger,
-    fontWeight: '700',
-  },
-  empty: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingTop: 80,
-  },
-  emptyText: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: COLORS.text,
-  },
-  emptySubtext: {
+  itemTotal: {
     fontSize: 14,
-    color: COLORS.textLight,
-    marginTop: 6,
-  },
-  footer: {
-    padding: 16,
-    backgroundColor: '#fff',
-    borderTopWidth: 1,
-    borderTopColor: COLORS.border,
-    gap: 10,
+    fontWeight: '700',
+    color: '#111827',
   },
   totalRow: {
+    marginTop: 20,
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
   },
   totalLabel: {
-    fontSize: 16,
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#111827',
+  },
+  totalValue: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#111827',
+  },
+  primaryButton: {
+    marginTop: 18,
+    backgroundColor: '#111827',
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  primaryButtonText: {
+    color: '#ffffff',
+    fontSize: 15,
     fontWeight: '700',
-    color: COLORS.text,
   },
-  totalAmount: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: COLORS.primary,
-  },
-  noteBtn: {
-    backgroundColor: COLORS.bg,
-    borderRadius: RADIUS.md,
-    paddingVertical: 14,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: COLORS.border,
-  },
-  noteBtnText: {
-    color: COLORS.text,
-    fontWeight: '800',
-    fontSize: 15,
-  },
-  actions: {
-    flexDirection: 'row',
-    gap: 10,
-  },
-  bigActionBtn: {
-    flex: 1,
-    backgroundColor: COLORS.primary,
-    borderRadius: RADIUS.md,
-    paddingVertical: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: 56,
-  },
-  bigActionBtnText: {
-    color: '#fff',
-    fontWeight: '800',
-    fontSize: 16,
-  },
-  primaryBox: {
-    backgroundColor: COLORS.warning,
-    borderRadius: RADIUS.md,
+  secondaryButton: {
+    marginTop: 12,
+    backgroundColor: '#eef2ff',
+    borderRadius: 14,
     paddingVertical: 14,
     alignItems: 'center',
   },
-  primaryBoxText: {
-    color: '#fff',
-    fontWeight: '800',
+  secondaryButtonText: {
+    color: '#3730a3',
     fontSize: 15,
+    fontWeight: '700',
   },
-  secondaryBox: {
-    backgroundColor: COLORS.bg,
-    borderRadius: RADIUS.md,
-    paddingVertical: 14,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: COLORS.border,
-  },
-  secondaryBoxText: {
-    color: COLORS.text,
-    fontWeight: '800',
-    fontSize: 15,
-  },
-  successBox: {
-    backgroundColor: COLORS.success,
-    borderRadius: RADIUS.md,
+  resetButton: {
+    marginTop: 12,
+    backgroundColor: '#fee2e2',
+    borderRadius: 14,
     paddingVertical: 14,
     alignItems: 'center',
   },
-  successBoxText: {
-    color: '#fff',
-    fontWeight: '800',
+  resetButtonText: {
+    color: '#b91c1c',
     fontSize: 15,
+    fontWeight: '700',
+  },
+  buttonDisabled: {
+    opacity: 0.45,
   },
 });

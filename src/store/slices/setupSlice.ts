@@ -1,9 +1,28 @@
 import uuid from 'react-native-uuid';
 import type { Establishment, Table, User, Zone } from '../../types';
+import { persistSetupSnapshot } from '../../db/setup.persistence';
 import type { AppSliceCreator, SetupSlice } from '../store.types';
 import { syncTablesWithOrders } from '../helpers/order';
 
-export const createSetupSlice: AppSliceCreator<SetupSlice> = (set, get) => ({
+function persistCurrentSetupState(
+  establishment: Establishment | null,
+  users: User[],
+  zones: Zone[],
+  tables: Table[]
+) {
+  try {
+    persistSetupSnapshot({
+      establishment,
+      users,
+      zones,
+      tables,
+    });
+  } catch (error) {
+    console.error('Persist setup snapshot failed', error);
+  }
+}
+
+export const createSetupSlice: AppSliceCreator = (set, get) => ({
   establishment: null,
   isSetupComplete: false,
   zones: [],
@@ -54,9 +73,7 @@ export const createSetupSlice: AppSliceCreator<SetupSlice> = (set, get) => ({
 
           return Array.from({ length: count }).map((_, tableIndex) => ({
             id: uuid.v4() as string,
-            name: payload.configuration.usesNumberedTables
-              ? `${zone.name.trim()} ${tableIndex + 1}`
-              : `${zone.name.trim()} ${tableIndex + 1}`,
+            name: `${zone.name.trim()} ${tableIndex + 1}`,
             zoneId: linkedZone?.id ?? null,
             status: 'free' as const,
             isActive: true,
@@ -68,9 +85,7 @@ export const createSetupSlice: AppSliceCreator<SetupSlice> = (set, get) => ({
 
         tables = Array.from({ length: totalCount }).map((_, index) => ({
           id: uuid.v4() as string,
-          name: payload.configuration.usesNumberedTables
-            ? `Table ${index + 1}`
-            : `Table ${index + 1}`,
+          name: `Table ${index + 1}`,
           zoneId: null,
           status: 'free' as const,
           isActive: true,
@@ -90,15 +105,19 @@ export const createSetupSlice: AppSliceCreator<SetupSlice> = (set, get) => ({
       configuration: payload.configuration,
     };
 
+    const users = [manager, ...employees];
+
     set({
       establishment,
-      users: [manager, ...employees],
+      users,
       zones,
       tables,
       isSetupComplete: true,
       currentUser: null,
       orders: [],
     });
+
+    persistCurrentSetupState(establishment, users, zones, tables);
   },
 
   addTablesForZone: (zoneName, count) => {
@@ -143,6 +162,14 @@ export const createSetupSlice: AppSliceCreator<SetupSlice> = (set, get) => ({
       tables: [...state.tables, ...newTables],
     }));
 
+    const state = get();
+    persistCurrentSetupState(
+      state.establishment,
+      state.users,
+      state.zones,
+      state.tables
+    );
+
     return { ok: true };
   },
 
@@ -169,15 +196,20 @@ export const createSetupSlice: AppSliceCreator<SetupSlice> = (set, get) => ({
       ),
     }));
 
+    const state = get();
+    persistCurrentSetupState(
+      state.establishment,
+      state.users,
+      state.zones,
+      state.tables
+    );
+
     return { ok: true };
   },
 
   removeTable: (tableId) => {
     const hasOpenOrder = get().orders.some(
-      (order) =>
-        order.tableId === tableId &&
-        order.status !== 'paid' &&
-        order.status !== 'cancelled'
+      (order) => order.tableId === tableId && order.status !== 'paid' && order.status !== 'cancelled'
     );
 
     if (hasOpenOrder) {
@@ -192,6 +224,14 @@ export const createSetupSlice: AppSliceCreator<SetupSlice> = (set, get) => ({
     set({
       tables: syncTablesWithOrders(remainingTables, get().orders),
     });
+
+    const state = get();
+    persistCurrentSetupState(
+      state.establishment,
+      state.users,
+      state.zones,
+      state.tables
+    );
 
     return { ok: true };
   },

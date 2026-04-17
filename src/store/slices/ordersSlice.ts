@@ -1,273 +1,131 @@
 import uuid from 'react-native-uuid';
-import * as DB from '../../db/database';
-import type { Order, OrderItem } from '../../types';
-import type { AppSliceCreator, CreateOrderOptions, OrdersSlice } from '../store.types';
+import type { AppSliceCreator } from '../store.types';
 import {
-  isOrderClosed,
-  recalcOrder,
-  syncTablesWithOrders,
-} from '../helpers/order';
+  addSalePaymentRecord,
+  createSaleRecord,
+  getSalesFromDb,
+  updateSaleStatusRecord,
+} from '../../db/sales.persistence';
+import {
+  getOpenShiftForCashier,
+  registerPaidSaleOnShift,
+} from '../../db/shifts.persistence';
 
-function persistAndSync(set: any, get: any, nextOrders: Order[]) {
-  const nextTables = syncTablesWithOrders(get().tables, nextOrders);
-
-  set({
-    orders: nextOrders,
-    tables: nextTables,
-  });
-
-  try {
-    DB.replaceTables(nextTables);
-  } catch (error) {
-    console.error('DB replaceTables failed', error);
-  }
-}
-
-export const createOrdersSlice: AppSliceCreator<OrdersSlice> = (set, get) => ({
+export const createOrdersSlice: AppSliceCreator = (set, get) => ({
   orders: [],
 
-  getOrderForTable: (tableId) => {
-    return get()
-      .orders
-      .filter(
-        (order) =>
-          order.tableId === tableId &&
-          order.status !== 'paid' &&
-          order.status !== 'cancelled'
-      )
-      .sort(
-        (a, b) =>
-          new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-      )[0];
-  },
-
-  getOrdersForTable: (tableId) => {
-    return get()
-      .orders
-      .filter(
-        (order) =>
-          order.tableId === tableId &&
-          order.status !== 'paid' &&
-          order.status !== 'cancelled'
-      )
-      .sort(
-        (a, b) =>
-          new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-      );
-  },
-
-  createOrder: (tableId, userId, options?: CreateOrderOptions) => {
-    const now = new Date().toISOString();
-    const sourceType = options?.sourceType ?? (tableId ? 'table' : 'counter');
-
-    const order: Order = {
-      id: uuid.v4() as string,
-      tableId,
-      zoneId: options?.zoneId ?? null,
-      sourceType,
-      status: 'open',
-      createdAt: now,
-      updatedAt: now,
-      createdByUserId: userId,
-      items: [],
-      subtotal: 0,
-      total: 0,
-      payment: null,
-    };
-
+  createSale: (input) => {
     try {
-      DB.createOrder(order);
-    } catch (error) {
-      console.error('DB createOrder failed', error);
-    }
+      const saleId = uuid.v4() as string;
 
-    const nextOrders = [order, ...get().orders];
-    persistAndSync(set, get, nextOrders);
-
-    return order;
-  },
-
-  addItemToOrder: (orderId, product) => {
-    const orders = get().orders;
-    const orderIndex = orders.findIndex((order) => order.id === orderId);
-
-    if (orderIndex === -1) {
-      return;
-    }
-
-    const order = orders[orderIndex];
-
-    if (isOrderClosed(order)) {
-      return;
-    }
-
-    const existingItemIndex = order.items.findIndex(
-      (item) => item.productId === product.id
-    );
-
-    let newItems: OrderItem[];
-
-    if (existingItemIndex >= 0) {
-      newItems = order.items.map((item, index) =>
-        index === existingItemIndex
-          ? {
-              ...item,
-              quantity: item.quantity + 1,
-              lineTotal: (item.quantity + 1) * item.unitPriceSnapshot,
-            }
-          : item
-      );
-    } else {
-      const newItem: OrderItem = {
+      const items = input.items.map((item) => ({
         id: uuid.v4() as string,
-        productId: product.id,
-        productNameSnapshot: product.name,
-        unitPriceSnapshot: product.price,
-        quantity: 1,
-        lineTotal: product.price,
-      };
+        productId: item.productId,
+        productName: item.productName,
+        unitPrice: item.unitPrice,
+        quantity: item.quantity,
+        total: item.total,
+      }));
 
-      newItems = [...order.items, newItem];
-    }
+      const totalAmount = items.reduce((sum, item) => sum + item.total, 0);
 
-    const updatedOrder = recalcOrder({
-      ...order,
-      items: newItems,
-      updatedAt: new Date().toISOString(),
-    });
+      createSaleRecord({
+        id: saleId,
+        tableId: input.tableId ?? null,
+        zoneId: input.zoneId ?? null,
+        sourceType: input.sourceType,
+        sourceLabel: input.sourceLabel ?? null,
+        serverId: input.serverId,
+        shiftId: input.shiftId ?? null,
+        status: input.status,
+        items,
+        totalAmount,
+      });
 
-    try {
-      DB.updateOrder(updatedOrder);
+      const sales = getSalesFromDb();
+
+      set({
+        orders: sales,
+      });
+
+      return saleId;
     } catch (error) {
-      console.error('DB updateOrder(addItemToOrder) failed', error);
+      console.error('createSale failed', error);
+      return null;
     }
-
-    const nextOrders = [...orders];
-    nextOrders[orderIndex] = updatedOrder;
-
-    persistAndSync(set, get, nextOrders);
   },
 
-  updateItemQuantity: (orderId, itemId, quantity) => {
-    const orders = get().orders;
-    const orderIndex = orders.findIndex((order) => order.id === orderId);
-
-    if (orderIndex === -1) {
-      return;
-    }
-
-    const order = orders[orderIndex];
-
-    if (isOrderClosed(order)) {
-      return;
-    }
-
-    let newItems: OrderItem[];
-
-    if (quantity <= 0) {
-      newItems = order.items.filter((item) => item.id !== itemId);
-    } else {
-      newItems = order.items.map((item) =>
-        item.id === itemId
-          ? {
-              ...item,
-              quantity,
-              lineTotal: quantity * item.unitPriceSnapshot,
-            }
-          : item
-      );
-    }
-
-    const updatedOrder = recalcOrder({
-      ...order,
-      items: newItems,
-      updatedAt: new Date().toISOString(),
-    });
-
+  updateSaleStatus: (saleId, status) => {
     try {
-      DB.updateOrder(updatedOrder);
+      updateSaleStatusRecord(saleId, status);
+      const sales = getSalesFromDb();
+
+      set({
+        orders: sales,
+      });
     } catch (error) {
-      console.error('DB updateOrder(updateItemQuantity) failed', error);
+      console.error('updateSaleStatus failed', error);
     }
-
-    const nextOrders = [...orders];
-    nextOrders[orderIndex] = updatedOrder;
-
-    persistAndSync(set, get, nextOrders);
   },
 
-  removeItem: (orderId, itemId) => {
-    get().updateItemQuantity(orderId, itemId, 0);
-  },
-
-  setOrderStatus: (orderId, status) => {
-    const orders = get().orders;
-    const orderIndex = orders.findIndex((order) => order.id === orderId);
-
-    if (orderIndex === -1) {
-      return;
-    }
-
-    const order = orders[orderIndex];
-
-    const updatedOrder: Order = {
-      ...order,
-      status,
-      updatedAt: new Date().toISOString(),
-    };
-
+  paySale: ({ saleId, method, amount, paidByUserId }) => {
     try {
-      DB.updateOrder(updatedOrder);
-    } catch (error) {
-      console.error('DB updateOrder(setOrderStatus) failed', error);
-    }
+      const currentSales = getSalesFromDb();
+      const sale = currentSales.find((item) => item.id === saleId);
 
-    const nextOrders = [...orders];
-    nextOrders[orderIndex] = updatedOrder;
+      if (!sale) {
+        throw new Error('Vente introuvable');
+      }
 
-    persistAndSync(set, get, nextOrders);
-  },
+      if (sale.status === 'PAID') {
+        throw new Error('Cette vente est déjà payée');
+      }
 
-  payOrder: (orderId, method, amountReceived, cashierUserId) => {
-    const orders = get().orders;
-    const orderIndex = orders.findIndex((order) => order.id === orderId);
+      if (sale.status !== 'MONEY_COLLECTED') {
+        throw new Error("Cette vente n'est pas prête pour paiement");
+      }
 
-    if (orderIndex === -1) {
-      return;
-    }
+      const openShift = getOpenShiftForCashier(paidByUserId);
 
-    const order = orders[orderIndex];
+      if (!openShift) {
+        throw new Error('Aucun shift ouvert pour cette caissière');
+      }
 
-    if (isOrderClosed(order)) {
-      return;
-    }
-
-    const safeAmountReceived = Number.isFinite(amountReceived) ? amountReceived : 0;
-    const changeGiven = Math.max(0, safeAmountReceived - order.total);
-    const paidAt = new Date().toISOString();
-
-    const updatedOrder: Order = {
-      ...order,
-      status: 'paid',
-      updatedAt: paidAt,
-      payment: {
+      addSalePaymentRecord({
+        id: uuid.v4() as string,
+        saleId,
+        shiftId: openShift.id,
         method,
-        amountReceived: safeAmountReceived,
-        changeGiven,
-        paidAt,
-        cashierUserId,
-      },
-    };
+        amount,
+        paidByUserId,
+      });
 
-    try {
-      DB.updateOrder(updatedOrder);
+      registerPaidSaleOnShift({
+        shiftId: openShift.id,
+        amount,
+        method,
+      });
+
+      const sales = getSalesFromDb();
+
+      set({
+        orders: sales,
+      });
     } catch (error) {
-      console.error('DB updateOrder(payOrder) failed', error);
+      console.error('paySale failed', error);
+      throw error;
     }
+  },
 
-    const nextOrders = [...orders];
-    nextOrders[orderIndex] = updatedOrder;
+  hydrateSalesFromDb: () => {
+    try {
+      const sales = getSalesFromDb();
 
-    persistAndSync(set, get, nextOrders);
+      set({
+        orders: sales,
+      });
+    } catch (error) {
+      console.error('hydrateSalesFromDb failed', error);
+    }
   },
 });

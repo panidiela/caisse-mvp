@@ -1,96 +1,98 @@
 import * as DB from '../../db/database';
-import type { Order, Product, Table } from '../../types';
-import type { AppSliceCreator, DataSlice } from '../store.types';
-import { normalizeOrder, syncTablesWithOrders } from '../helpers/order';
+import { getSalesFromDb } from '../../db/sales.persistence';
+import type { AppSliceCreator } from '../store.types';
 
-export const createDataSlice: AppSliceCreator<DataSlice> = (set, get) => ({
+export const createDataSlice: AppSliceCreator = (set, get) => ({
+  users: [],
+  zones: [],
+  tables: [],
   products: [],
+  orders: [],
+  isHydrating: false,
 
-  initApp: () => {
+  initApp: async () => {
     try {
-      DB.initDB();
-    } catch (error) {
-      console.error('DB init failed', error);
-    }
+      set({ isHydrating: true });
 
-    let dbTables: Table[] = [];
-    let dbProducts: Product[] = [];
-    let dbOrders: Order[] = [];
+      if (typeof DB.initDB === 'function') {
+        await Promise.resolve(DB.initDB());
+      }
 
-    try {
-      dbTables = DB.getTables() ?? [];
-    } catch (error) {
-      console.error('DB getTables failed', error);
-    }
+      const users =
+        typeof DB.getUsers === 'function' ? await Promise.resolve(DB.getUsers()) : [];
+      const zones =
+        typeof DB.getZones === 'function' ? await Promise.resolve(DB.getZones()) : [];
+      const tables =
+        typeof DB.getTables === 'function' ? await Promise.resolve(DB.getTables()) : [];
+      const products =
+        typeof DB.getProducts === 'function'
+          ? await Promise.resolve(DB.getProducts())
+          : [];
 
-    try {
-      dbProducts = DB.getProducts() ?? [];
-    } catch (error) {
-      console.error('DB getProducts failed', error);
-    }
-
-    try {
-      dbOrders = (DB.getOrders() ?? []).map(normalizeOrder);
-    } catch (error) {
-      console.error('DB getOrders failed', error);
-    }
-
-    set((state) => {
-      const nextOrders = dbOrders.length > 0 ? dbOrders : state.orders;
-      const baseTables = dbTables.length > 0 ? dbTables : state.tables;
-      const nextTables = syncTablesWithOrders(baseTables, nextOrders);
-
-      return {
-        products: dbProducts.length > 0 ? dbProducts : state.products,
-        orders: nextOrders,
-        tables: nextTables,
-      };
-    });
-
-    try {
-      const syncedTables = get().tables;
-      DB.replaceTables(syncedTables);
-    } catch (error) {
-      console.error('DB replaceTables after init failed', error);
-    }
-  },
-
-  refreshTables: () => {
-    const orders = get().orders;
-    const currentTables = get().tables;
-    const nextTables = syncTablesWithOrders(currentTables, orders);
-
-    set({ tables: nextTables });
-
-    try {
-      DB.replaceTables(nextTables);
-    } catch (error) {
-      console.error('DB replaceTables failed', error);
-    }
-  },
-
-  refreshProducts: () => {
-    try {
-      const dbProducts = DB.getProducts() ?? [];
-      set({ products: dbProducts });
-    } catch (error) {
-      console.error('DB refreshProducts failed', error);
-    }
-  },
-
-  refreshOrders: () => {
-    try {
-      const dbOrders = (DB.getOrders() ?? []).map(normalizeOrder);
-      const nextTables = syncTablesWithOrders(get().tables, dbOrders);
+      let orders: any[] = [];
+      try {
+        orders = await Promise.resolve(getSalesFromDb());
+      } catch (error) {
+        console.error('getSalesFromDb failed, fallback to legacy orders', error);
+        orders =
+          typeof DB.getOrders === 'function'
+            ? await Promise.resolve(DB.getOrders())
+            : [];
+      }
 
       set({
-        orders: dbOrders,
-        tables: nextTables,
+        users: Array.isArray(users) ? users : [],
+        zones: Array.isArray(zones) ? zones : [],
+        tables: Array.isArray(tables) ? tables : [],
+        products: Array.isArray(products) ? products : [],
+        orders: Array.isArray(orders) ? orders : [],
+      });
+    } catch (error) {
+      console.error('DB init failed', error);
+    } finally {
+      set({ isHydrating: false });
+    }
+  },
+
+  hydrateFromDb: async () => {
+    try {
+      set({ isHydrating: true });
+
+      const users =
+        typeof DB.getUsers === 'function' ? await Promise.resolve(DB.getUsers()) : [];
+      const zones =
+        typeof DB.getZones === 'function' ? await Promise.resolve(DB.getZones()) : [];
+      const tables =
+        typeof DB.getTables === 'function' ? await Promise.resolve(DB.getTables()) : [];
+      const products =
+        typeof DB.getProducts === 'function'
+          ? await Promise.resolve(DB.getProducts())
+          : [];
+
+      let orders: any[] = [];
+      try {
+        orders = await Promise.resolve(getSalesFromDb());
+      } catch (error) {
+        console.error('getSalesFromDb failed, fallback to legacy orders', error);
+        orders =
+          typeof DB.getOrders === 'function'
+            ? await Promise.resolve(DB.getOrders())
+            : [];
+      }
+
+      set({
+        users: Array.isArray(users) ? users : [],
+        zones: Array.isArray(zones) ? zones : [],
+        tables: Array.isArray(tables) ? tables : [],
+        products: Array.isArray(products) ? products : [],
+        orders: Array.isArray(orders) ? orders : [],
       });
 
-      DB.replaceTables(nextTables);
+      console.log('Hydration OK');
     } catch (error) {
-      console.error('DB refreshOrders failed', error);
+      console.error('Hydration failed', error);
+    } finally {
+      set({ isHydrating: false });
     }
   },
 });

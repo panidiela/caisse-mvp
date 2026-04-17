@@ -1,136 +1,50 @@
-export type UserRole =
-  | 'server'
-  | 'cashier'
-  | 'manager'
-  | 'admin'
-  | 'stockist';
+export * from './app.types';
+export * from './sale.types';
+export * from './shift.types';
+export * from './stock.types';
 
-export type ServiceMode = 'free' | 'by_zone' | 'by_table';
+/**
+ * Compatibilité temporaire avec l'ancien code.
+ * On garde encore quelques aliases pour éviter de casser l'app
+ * pendant la transition Order -> Sale.
+ */
 
-export type SaleSourceType = 'table' | 'counter' | 'zone' | 'free';
+export type LegacyOrderStatus =
+  | 'open'
+  | 'waiting_payment'
+  | 'paid'
+  | 'cancelled';
 
-export type TableStatus = 'free' | 'occupied' | 'attention';
-
-export type OrderStatus = 'open' | 'waiting_payment' | 'paid' | 'cancelled';
-
-export type PaymentMethod = 'cash' | 'card' | 'momo' | 'other';
-
-export type SubscriptionPlan = 'free' | 'pro';
-
-export interface User {
-  id: string;
-  name: string;
-  identifier: string;
-  pin: string;
-  role: UserRole;
-  isActive: boolean;
-  createdAt: string;
-}
-
-export interface Zone {
-  id: string;
-  name: string;
-  isActive: boolean;
-  createdAt: string;
-}
-
-export interface Table {
-  id: string;
-  name: string;
-  zoneId: string | null;
-  status: TableStatus;
-  isActive: boolean;
-  createdAt: string;
-}
-
-export interface Product {
-  id: string;
-  name: string;
-  price: number;
-  category: string | null;
-  isActive: boolean;
-  createdAt: string;
-}
-
-export interface OrderItem {
+export type LegacyOrderItem = {
   id: string;
   productId: string;
-  productNameSnapshot: string;
-  unitPriceSnapshot: number;
-  quantity: number;
-  lineTotal: number;
-}
-
-export interface OrderPayment {
-  method: PaymentMethod;
-  amountReceived: number;
-  changeGiven: number;
-  paidAt: string;
-  cashierUserId: string;
-}
-
-export interface Order {
-  id: string;
-  tableId: string | null;
-  zoneId: string | null;
-  sourceType: SaleSourceType;
-  status: OrderStatus;
-  createdAt: string;
-  updatedAt: string;
-  createdByUserId: string;
-  items: OrderItem[];
-  subtotal: number;
+  name: string;
+  price: number;
+  qty: number;
   total: number;
-  payment: OrderPayment | null;
-}
+};
 
-export interface EstablishmentConfiguration {
-  hasCounter: boolean;
-  usesZones: boolean;
-  usesTables: boolean;
-  usesNumberedTables: boolean;
-  serviceMode: ServiceMode;
-}
-
-export interface Establishment {
+export type LegacyOrderPayment = {
   id: string;
-  name: string;
-  city: string | null;
-  isSetupComplete: boolean;
-  plan: SubscriptionPlan;
-  planActivatedAt: string | null;
-  planExpiresAt: string | null;
-  configuration: EstablishmentConfiguration;
-}
+  method: 'cash' | 'mobile_money' | 'other';
+  amount: number;
+  paidAt: string;
+  paidBy?: string;
+};
 
-export interface SetupManagerPayload {
-  name: string;
-  identifier: string;
-  pin: string;
-  role: Extract<UserRole, 'manager' | 'admin'>;
-}
+export type LegacyOrder = {
+  id: string;
+  status: LegacyOrderStatus;
+  tableId?: string | null;
+  zoneId?: string | null;
+  serverId?: string;
+  cashierId?: string | null;
+  items: LegacyOrderItem[];
+  payments?: LegacyOrderPayment[];
+  total?: number;
+  totalAmount?: number;
+  createdAt?: string;
+  updatedAt?: string;
+};
 
-export interface SetupEmployeePayload {
-  name: string;
-  identifier: string;
-  pin: string;
-  role: Extract<UserRole, 'server' | 'cashier' | 'stockist'>;
-}
-
-export interface SetupZonePayload {
-  name: string;
-  tableCount: number;
-}
-
-export interface SetupPayload {
-  establishmentName: string;
-  city?: string | null;
-  configuration: EstablishmentConfiguration;
-  manager: SetupManagerPayload;
-  employees: SetupEmployeePayload[];
-  zones: SetupZonePayload[];
-}
-
-export type Sale = Order;
-export type SaleItem = OrderItem;
-export type SalePayment = OrderPayment;
+export type Order = LegacyOrder;

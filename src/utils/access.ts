@@ -1,68 +1,33 @@
-import { User } from '../types';
+export type AppRole = 'server' | 'cashier' | 'manager' | 'admin' | 'stockist';
 
-export function canAccessServer(user: User | null) {
-  if (!user || !user.isActive) return false;
-
-  return (
-    user.role === 'server' ||
-    user.role === 'manager' ||
-    user.role === 'admin'
-  );
+export function getHomeRouteForRole(role?: AppRole | null): string {
+  switch (role) {
+    case 'server':
+      return '/(server)/tables';
+    case 'cashier':
+      return '/(cashier)/caisse';
+    case 'stockist':
+      return '/(manager)/stock';
+    case 'manager':
+    case 'admin':
+      return '/(manager)/dashboard';
+    default:
+      return '/login';
+  }
 }
 
-export function canCreateCounterOrder(user: User | null) {
-  if (!user || !user.isActive) return false;
-
-  return (
-    user.role === 'cashier' ||
-    user.role === 'manager' ||
-    user.role === 'admin'
-  );
+export function canAccessServer(role?: AppRole | null): boolean {
+  return role === 'server';
 }
 
-export function canAccessCashier(user: User | null) {
-  if (!user || !user.isActive) return false;
-
-  return (
-    user.role === 'cashier' ||
-    user.role === 'manager' ||
-    user.role === 'admin'
-  );
+export function canAccessCashier(role?: AppRole | null): boolean {
+  return role === 'cashier';
 }
 
-export function canAccessManager(user: User | null) {
-  if (!user || !user.isActive) return false;
-
-  return (
-    user.role === 'manager' ||
-    user.role === 'admin'
-  );
+export function canAccessManager(role?: AppRole | null): boolean {
+  return role === 'manager' || role === 'admin';
 }
 
-export function canAccessStock(user: User | null) {
-  if (!user || !user.isActive) return false;
-
-  return (
-    user.role === 'stockist' ||
-    user.role === 'manager' ||
-    user.role === 'admin'
-  );
-}
-
-export function canManageUsers(user: User | null) {
-  if (!user || !user.isActive) return false;
-
-  return (
-    user.role === 'admin' ||
-    user.role === 'manager'
-  );
-}
-
-export function canChangeGlobalSettings(user: User | null) {
-  if (!user || !user.isActive) return false;
-
-  return (
-    user.role === 'admin' ||
-    user.role === 'manager'
-  );
+export function canAccessStock(role?: AppRole | null): boolean {
+  return role === 'stockist' || role === 'manager' || role === 'admin';
 }

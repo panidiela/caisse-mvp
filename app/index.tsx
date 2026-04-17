@@ -1,5 +1,5 @@
-import React, { useEffect } from 'react';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import React from 'react';
+import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { Redirect } from 'expo-router';
 import { useStore } from '../src/store/useStore';
 
@@ -7,16 +7,13 @@ export default function EntryScreen() {
   const currentUser = useStore((s) => s.currentUser);
   const isSetupComplete = useStore((s) => s.isSetupComplete);
   const isHydrating = useStore((s) => s.isHydrating);
-  const hydrateFromDb = useStore((s) => s.hydrateFromDb);
-
-  useEffect(() => {
-    hydrateFromDb();
-  }, [hydrateFromDb]);
 
   if (isHydrating) {
     return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" />
+      <View style={styles.container}>
+        <ActivityIndicator size="large" color="#111827" />
+        <Text style={styles.title}>Yewo</Text>
+        <Text style={styles.subtitle}>Chargement de l’application…</Text>
       </View>
     );
   }
@@ -49,10 +46,23 @@ export default function EntryScreen() {
 }
 
 const styles = StyleSheet.create({
-  loadingContainer: {
+  container: {
     flex: 1,
+    backgroundColor: '#f5f7fb',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#ffffff',
+    padding: 24,
+  },
+  title: {
+    marginTop: 18,
+    fontSize: 30,
+    fontWeight: '800',
+    color: '#111827',
+  },
+  subtitle: {
+    marginTop: 8,
+    fontSize: 15,
+    color: '#6b7280',
+    textAlign: 'center',
   },
 });

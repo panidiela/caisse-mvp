@@ -1,459 +1,566 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Alert,
   FlatList,
+  Pressable,
+  SafeAreaView,
+  ScrollView,
   StyleSheet,
   Text,
-  TouchableOpacity,
   View,
 } from 'react-native';
-import { useRouter } from 'expo-router';
-import { Screen } from '../../src/components/ui/Screen';
+import uuid from 'react-native-uuid';
+import { router } from 'expo-router';
 import { useStore } from '../../src/store/useStore';
-import { COLORS, RADIUS, SHADOW } from '../../src/constants/theme';
-import { formatPrice, formatTime } from '../../src/utils/format';
-import { canAccessCashier } from '../../src/utils/access';
-import { Sale } from '../../src/types';
+
+type Product = {
+  id: string;
+  name: string;
+  price?: number;
+};
+
+type CartLine = {
+  id: string;
+  productId?: string;
+  name: string;
+  price: number;
+  qty: number;
+};
+
+type SaleItem = {
+  id: string;
+  productName?: string;
+  quantity?: number;
+  total?: number;
+};
+
+type Sale = {
+  id: string;
+  status: 'DRAFT' | 'SENT' | 'MONEY_COLLECTED' | 'PAID' | 'CANCELLED';
+  sourceLabel?: string | null;
+  totalAmount: number;
+  items?: SaleItem[];
+  createdAt?: string;
+};
 
 export default function CaisseScreen() {
-  const router = useRouter();
-  const {
-    orders,
-    tables,
-    zones,
-    currentUser,
-    createOrder,
-    payOrder,
-    establishment,
-  } = useStore();
+  const currentUser = useStore((s) => s.currentUser);
+  const logout = useStore((s) => s.logout);
+  const products = useStore((s) => (s.products ?? []) as Product[]);
+  const orders = useStore((s) => (s.orders ?? []) as Sale[]);
+  const createSale = useStore((s) => s.createSale);
+  const paySale = useStore((s) => s.paySale);
+  const hydrateSalesFromDb = useStore((s) => s.hydrateSalesFromDb);
 
-  const [tab, setTab] = useState<'to_process' | 'paid'>('to_process');
-
-  useEffect(() => {
-    if (!currentUser) {
-      router.replace('/');
-      return;
-    }
-
-    if (!canAccessCashier(currentUser)) {
-      Alert.alert('Accès refusé', 'Cet écran est réservé à la caisse.', [
-        { text: 'OK', onPress: () => router.replace('/') },
-      ]);
-    }
-  }, [currentUser, router]);
-
-  if (!currentUser || !canAccessCashier(currentUser) || !establishment) {
-    return null;
-  }
-
-  const config = establishment.configuration;
-
-  const toProcess = useMemo(() => {
-    return orders
-      .filter((o) => o.status === 'open' || o.status === 'waiting_payment')
-      .sort(
-        (a, b) =>
-          new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-      );
-  }, [orders]);
-
-  const paidOrders = useMemo(() => {
-    return orders
-      .filter((o) => o.status === 'paid')
-      .sort((a, b) => {
-        const aDate = a.payment?.paidAt ?? a.updatedAt;
-        const bDate = b.payment?.paidAt ?? b.updatedAt;
-        return new Date(bDate).getTime() - new Date(aDate).getTime();
-      });
-  }, [orders]);
-
-  const handleCounterSale = () => {
-    const order = createOrder(null, currentUser.id, {
-      sourceType: 'counter',
-      zoneId: null,
-    });
-
-    router.push({
-      pathname: '/(server)/order',
-      params: {
-        orderId: order.id,
-        tableId: '',
-        zoneId: '',
-        sourceType: 'counter',
-      },
-    });
-  };
-
-  const handleFreeSale = () => {
-    const order = createOrder(null, currentUser.id, {
-      sourceType: 'free',
-      zoneId: null,
-    });
-
-    router.push({
-      pathname: '/(server)/order',
-      params: {
-        orderId: order.id,
-        tableId: '',
-        zoneId: '',
-        sourceType: 'free',
-      },
-    });
-  };
-
-  const handleOpenOrder = (item: Sale) => {
-    router.push({
-      pathname: '/(server)/order',
-      params: {
-        orderId: item.id,
-        tableId: item.tableId ?? '',
-        zoneId: item.zoneId ?? '',
-        sourceType: item.sourceType,
-      },
-    });
-  };
-
-  const handleConfirmPayment = (item: Sale) => {
-    if (item.status !== 'waiting_payment') {
-      Alert.alert(
-        'Paiement impossible',
-        'La vente doit d’abord être marquée comme prête au paiement par le service.'
-      );
-      return;
-    }
-
-    Alert.alert(
-      'Valider le paiement ?',
-      `Confirmer l’encaissement de ${formatPrice(item.total)} ?`,
-      [
-        { text: 'Annuler', style: 'cancel' },
-        {
-          text: 'Valider',
-          onPress: () => {
-            payOrder(item.id, 'cash', item.total, currentUser.id);
-          },
-        },
-      ]
-    );
-  };
+  const [counterCart, setCounterCart] = useState<CartLine[]>([]);
 
   const handleLogout = () => {
-    useStore.getState().logout();
-    router.replace('/');
+    logout();
+    router.replace('/login');
   };
 
-  const getStatusLabel = (status: string) => {
-    if (status === 'open') return '📝 En cours';
-    if (status === 'waiting_payment') return '⏳ À encaisser';
-    if (status === 'paid') return '✅ Payée';
-    if (status === 'cancelled') return '❌ Annulée';
-    return '📄 Vente';
+  const handleOpenShift = () => {
+    router.push('/(cashier)/shift');
   };
 
-  const getStatusColor = (status: string) => {
-    if (status === 'open') return COLORS.occupied;
-    if (status === 'waiting_payment') return COLORS.warning;
-    if (status === 'paid') return COLORS.success;
-    if (status === 'cancelled') return COLORS.danger;
-    return COLORS.textLight;
-  };
-
-  const getSourceLabel = (order: Sale) => {
-    if (order.sourceType === 'counter') return '🧾 Comptoir';
-
-    if (order.sourceType === 'zone') {
-      const zone = zones.find((z) => z.id === order.zoneId);
-      return zone ? `📍 ${zone.name}` : '📍 Zone';
+  const handleRefresh = () => {
+    if (typeof hydrateSalesFromDb === 'function') {
+      hydrateSalesFromDb();
     }
-
-    if (order.sourceType === 'table') {
-      const table = tables.find((t) => t.id === order.tableId);
-      return table ? `🪑 ${table.name}` : '🪑 Table';
-    }
-
-    return '📄 Libre';
   };
 
-  const renderOrder = ({ item }: { item: Sale }) => {
-    const canValidate = item.status === 'waiting_payment';
+  const pendingSales = useMemo(
+    () => orders.filter((sale) => sale.status === 'MONEY_COLLECTED'),
+    [orders]
+  );
 
-    return (
-      <View style={s.card}>
-        <TouchableOpacity
-          onPress={() => handleOpenOrder(item)}
-          activeOpacity={0.85}
-        >
-          <View style={s.cardHeader}>
-            <View style={{ flex: 1 }}>
-              <Text style={s.cardTitle}>
-                Vente #{item.id.slice(0, 8).toUpperCase()}
-              </Text>
-              <Text style={s.cardSource}>{getSourceLabel(item)}</Text>
-            </View>
+  const paidSalesCount = useMemo(
+    () => orders.filter((sale) => sale.status === 'PAID').length,
+    [orders]
+  );
 
-            <Text style={s.cardTime}>{formatTime(item.updatedAt)}</Text>
-          </View>
+  const addToCounterCart = (product: Product) => {
+    setCounterCart((prev) => {
+      const existing = prev.find((p) => p.id === product.id);
 
-          <View style={s.cardFooter}>
-            <Text style={s.cardItems}>{item.items.length} article(s)</Text>
-            <Text style={s.cardTotal}>{formatPrice(item.total)}</Text>
-          </View>
+      if (existing) {
+        return prev.map((p) =>
+          p.id === product.id ? { ...p, qty: p.qty + 1 } : p
+        );
+      }
 
-          <View style={s.bottomRow}>
-            <View
-              style={[
-                s.statusPill,
-                { backgroundColor: getStatusColor(item.status) },
-              ]}
-            >
-              <Text style={s.statusPillText}>{getStatusLabel(item.status)}</Text>
-            </View>
+      return [
+        ...prev,
+        {
+          id: product.id,
+          productId: product.id,
+          name: product.name,
+          price: product.price ?? 0,
+          qty: 1,
+        },
+      ];
+    });
+  };
 
-            <Text style={s.openHint}>Ouvrir ›</Text>
-          </View>
-        </TouchableOpacity>
-
-        {canValidate && (
-          <TouchableOpacity
-            style={s.validateBtn}
-            onPress={() => handleConfirmPayment(item)}
-          >
-            <Text style={s.validateBtnText}>Valider paiement</Text>
-          </TouchableOpacity>
-        )}
-      </View>
+  const decreaseCounterQty = (productId: string) => {
+    setCounterCart((prev) =>
+      prev
+        .map((item) =>
+          item.id === productId ? { ...item, qty: item.qty - 1 } : item
+        )
+        .filter((item) => item.qty > 0)
     );
   };
 
-  const data = tab === 'to_process' ? toProcess : paidOrders;
+  const counterTotal = useMemo(
+    () => counterCart.reduce((sum, item) => sum + item.price * item.qty, 0),
+    [counterCart]
+  );
+
+  const handleValidatePendingPayment = (sale: Sale) => {
+    if (!currentUser) {
+      Alert.alert('Erreur', 'Aucun utilisateur connecté.');
+      return;
+    }
+
+    try {
+      paySale({
+        saleId: sale.id,
+        method: 'cash',
+        amount: sale.totalAmount,
+        paidByUserId: currentUser.id,
+      });
+
+      Alert.alert(
+        'Paiement validé',
+        'La vente est maintenant marquée comme PAID et rattachée au shift ouvert.'
+      );
+    } catch (error: any) {
+      Alert.alert(
+        'Paiement impossible',
+        error?.message || 'Impossible de valider ce paiement.'
+      );
+    }
+  };
+
+  const handleValidateCounterSale = () => {
+    if (!currentUser) {
+      Alert.alert('Erreur', 'Aucun utilisateur connecté.');
+      return;
+    }
+
+    if (counterCart.length === 0) {
+      Alert.alert('Panier vide', 'Ajoute au moins un produit.');
+      return;
+    }
+
+    try {
+      const saleId = createSale({
+        tableId: null,
+        zoneId: null,
+        sourceType: 'counter',
+        sourceLabel: 'Comptoir',
+        serverId: currentUser.id,
+        shiftId: null,
+        status: 'MONEY_COLLECTED',
+        items: counterCart.map((item) => ({
+          id: uuid.v4() as string,
+          productId: item.productId || item.id,
+          productName: item.name,
+          unitPrice: item.price,
+          quantity: item.qty,
+          total: item.qty * item.price,
+        })),
+      });
+
+      if (!saleId) {
+        Alert.alert('Erreur', "Impossible d'enregistrer la vente comptoir.");
+        return;
+      }
+
+      paySale({
+        saleId,
+        method: 'cash',
+        amount: counterTotal,
+        paidByUserId: currentUser.id,
+      });
+
+      setCounterCart([]);
+
+      Alert.alert(
+        'Vente comptoir validée',
+        'La vente a été enregistrée puis validée en PAID.'
+      );
+    } catch (error: any) {
+      Alert.alert(
+        'Paiement impossible',
+        error?.message || "Impossible de finaliser la vente comptoir."
+      );
+    }
+  };
+
+  const renderPendingSaleCard = ({ item }: { item: Sale }) => (
+    <View style={styles.saleCard}>
+      <Text style={styles.saleTitle}>{item.sourceLabel || 'Vente'}</Text>
+      <Text style={styles.saleMeta}>Statut : {item.status}</Text>
+      <Text style={styles.saleMeta}>Montant : {item.totalAmount} FCFA</Text>
+      <Text style={styles.saleMeta}>
+        Articles : {Array.isArray(item.items) ? item.items.length : 0}
+      </Text>
+
+      <Pressable
+        style={styles.validateButton}
+        onPress={() => handleValidatePendingPayment(item)}
+      >
+        <Text style={styles.validateButtonText}>Valider paiement</Text>
+      </Pressable>
+    </View>
+  );
 
   return (
-    <Screen
-      title={`Caisse · ${currentUser.name}`}
-      rightAction={{ label: 'Déco', onPress: handleLogout }}
-    >
-      <View style={s.container}>
-        <View style={s.topActions}>
-          {config.hasCounter && (
-            <TouchableOpacity style={s.counterBtn} onPress={handleCounterSale}>
-              <Text style={s.counterText}>+ Vente comptoir</Text>
-            </TouchableOpacity>
-          )}
+    <SafeAreaView style={styles.container}>
+      <ScrollView contentContainerStyle={styles.scrollContent}>
+        <View style={styles.topBar}>
+          <View>
+            <Text style={styles.title}>Caisse</Text>
+            <Text style={styles.userText}>
+              Connecté : {currentUser?.name || currentUser?.identifier || 'Caissière'}
+            </Text>
+          </View>
 
-          {!config.usesTables && !config.usesZones && (
-            <TouchableOpacity style={s.freeBtn} onPress={handleFreeSale}>
-              <Text style={s.freeText}>+ Vente libre</Text>
-            </TouchableOpacity>
-          )}
+          <Pressable style={styles.logoutButton} onPress={handleLogout}>
+            <Text style={styles.logoutButtonText}>Changer</Text>
+          </Pressable>
         </View>
 
-        <View style={s.tabs}>
-          <TouchableOpacity
-            style={[s.tabBtn, tab === 'to_process' && s.tabBtnActive]}
-            onPress={() => setTab('to_process')}
-          >
-            <Text
-              style={[s.tabText, tab === 'to_process' && s.tabTextActive]}
-            >
-              À traiter
-            </Text>
-          </TouchableOpacity>
+        <View style={styles.actionsRow}>
+          <Pressable style={styles.shiftButton} onPress={handleOpenShift}>
+            <Text style={styles.shiftButtonText}>Ouvrir le shift</Text>
+          </Pressable>
 
-          <TouchableOpacity
-            style={[s.tabBtn, tab === 'paid' && s.tabBtnActive]}
-            onPress={() => setTab('paid')}
-          >
-            <Text style={[s.tabText, tab === 'paid' && s.tabTextActive]}>
-              Payées
-            </Text>
-          </TouchableOpacity>
+          <Pressable style={styles.refreshButton} onPress={handleRefresh}>
+            <Text style={styles.refreshButtonText}>Rafraîchir</Text>
+          </Pressable>
         </View>
+
+        <View style={styles.summaryCard}>
+          <Text style={styles.summaryTitle}>Résumé caisse</Text>
+          <Text style={styles.summaryText}>
+            Ventes en attente : <Text style={styles.summaryValue}>{pendingSales.length}</Text>
+          </Text>
+          <Text style={styles.summaryText}>
+            Ventes payées : <Text style={styles.summaryValue}>{paidSalesCount}</Text>
+          </Text>
+        </View>
+
+        <Text style={styles.section}>Vente comptoir directe</Text>
 
         <FlatList
-          data={data}
+          data={products}
           keyExtractor={(item) => item.id}
-          renderItem={renderOrder}
-          contentContainerStyle={s.listContent}
-          ListEmptyComponent={
-            <View style={s.empty}>
-              <Text style={s.emptyTitle}>
-                {tab === 'to_process'
-                  ? 'Aucune vente à traiter'
-                  : 'Aucune vente payée'}
-              </Text>
-              <Text style={s.emptyText}>
-                {tab === 'to_process'
-                  ? 'Les ventes en cours ou en attente de paiement apparaîtront ici.'
-                  : 'L’historique des ventes payées apparaîtra ici.'}
-              </Text>
+          horizontal
+          scrollEnabled={false}
+          contentContainerStyle={styles.productsList}
+          renderItem={({ item }) => (
+            <Pressable style={styles.productCard} onPress={() => addToCounterCart(item)}>
+              <Text style={styles.productName}>{item.name}</Text>
+              <Text style={styles.productPrice}>{item.price ?? 0} FCFA</Text>
+            </Pressable>
+          )}
+        />
+
+        {counterCart.length === 0 ? (
+          <Text style={styles.emptyText}>Aucun produit sélectionné pour le comptoir.</Text>
+        ) : (
+          <View style={styles.counterCartBox}>
+            {counterCart.map((item) => (
+              <View key={item.id} style={styles.counterCartRow}>
+                <View style={styles.counterCartInfo}>
+                  <Text style={styles.counterCartName}>{item.name}</Text>
+                  <Text style={styles.counterCartMeta}>
+                    {item.qty} × {item.price} FCFA
+                  </Text>
+                </View>
+
+                <View style={styles.counterCartActions}>
+                  <Pressable
+                    style={styles.qtyButton}
+                    onPress={() => decreaseCounterQty(item.id)}
+                  >
+                    <Text style={styles.qtyButtonText}>−</Text>
+                  </Pressable>
+                  <Text style={styles.counterCartTotal}>
+                    {item.qty * item.price} FCFA
+                  </Text>
+                </View>
+              </View>
+            ))}
+
+            <View style={styles.totalRow}>
+              <Text style={styles.totalLabel}>Total comptoir</Text>
+              <Text style={styles.totalValue}>{counterTotal} FCFA</Text>
             </View>
+
+            <Pressable
+              style={styles.primaryCounterButton}
+              onPress={handleValidateCounterSale}
+            >
+              <Text style={styles.primaryCounterButtonText}>
+                Valider la vente comptoir
+              </Text>
+            </Pressable>
+          </View>
+        )}
+
+        <Text style={styles.section}>Factures en attente</Text>
+
+        <FlatList
+          data={pendingSales}
+          keyExtractor={(item) => item.id}
+          scrollEnabled={false}
+          contentContainerStyle={styles.listContent}
+          renderItem={renderPendingSaleCard}
+          ListEmptyComponent={
+            <Text style={styles.emptyText}>
+              Aucune vente en attente de validation.
+            </Text>
           }
         />
-      </View>
-    </Screen>
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
-const s = StyleSheet.create({
+const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: '#f5f7fb',
   },
-  topActions: {
-    flexDirection: 'row',
-    gap: 12,
-    paddingHorizontal: 16,
-    paddingTop: 16,
-    flexWrap: 'wrap',
-  },
-  counterBtn: {
-    flex: 1,
-    minWidth: '47%',
-    backgroundColor: COLORS.primary,
-    borderRadius: RADIUS.lg,
-    padding: 16,
-    ...SHADOW.md,
-  },
-  counterText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '800',
-  },
-  freeBtn: {
-    flex: 1,
-    minWidth: '47%',
-    backgroundColor: '#fff',
-    borderRadius: RADIUS.lg,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    ...SHADOW.md,
-  },
-  freeText: {
-    color: COLORS.text,
-    fontSize: 16,
-    fontWeight: '800',
-  },
-  tabs: {
-    flexDirection: 'row',
-    gap: 10,
-    paddingHorizontal: 16,
-    paddingTop: 16,
-    paddingBottom: 8,
-  },
-  tabBtn: {
-    flex: 1,
-    backgroundColor: '#fff',
-    borderRadius: RADIUS.md,
-    paddingVertical: 12,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: COLORS.border,
-  },
-  tabBtnActive: {
-    backgroundColor: COLORS.primary,
-    borderColor: COLORS.primary,
-  },
-  tabText: {
-    color: COLORS.text,
-    fontWeight: '700',
-  },
-  tabTextActive: {
-    color: '#fff',
-  },
-  listContent: {
-    padding: 16,
-    gap: 12,
+  scrollContent: {
+    padding: 20,
     paddingBottom: 32,
-    flexGrow: 1,
   },
-  card: {
-    backgroundColor: '#fff',
-    borderRadius: RADIUS.lg,
-    padding: 16,
-    gap: 12,
-    ...SHADOW.md,
-  },
-  cardHeader: {
+  topBar: {
     flexDirection: 'row',
-    gap: 12,
+    justifyContent: 'space-between',
     alignItems: 'flex-start',
+    marginBottom: 8,
   },
-  cardTitle: {
-    fontSize: 16,
+  title: {
+    fontSize: 26,
     fontWeight: '800',
-    color: COLORS.text,
+    color: '#111827',
   },
-  cardSource: {
+  userText: {
     marginTop: 4,
     fontSize: 13,
-    color: COLORS.textLight,
+    color: '#6b7280',
   },
-  cardTime: {
-    fontSize: 12,
-    color: COLORS.textLight,
-    fontWeight: '600',
+  logoutButton: {
+    backgroundColor: '#fee2e2',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
   },
-  cardFooter: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  cardItems: {
-    fontSize: 13,
-    color: COLORS.textLight,
-  },
-  cardTotal: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: COLORS.primary,
-  },
-  bottomRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  statusPill: {
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    alignSelf: 'flex-start',
-  },
-  statusPillText: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: '800',
-  },
-  openHint: {
-    color: COLORS.textLight,
+  logoutButtonText: {
+    color: '#b91c1c',
+    fontSize: 14,
     fontWeight: '700',
   },
-  validateBtn: {
-    backgroundColor: COLORS.success,
-    borderRadius: RADIUS.md,
+  actionsRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 8,
+  },
+  shiftButton: {
+    flex: 1,
+    backgroundColor: '#eef2ff',
+    borderRadius: 12,
     paddingVertical: 12,
     alignItems: 'center',
   },
-  validateBtnText: {
-    color: '#fff',
-    fontWeight: '800',
+  shiftButtonText: {
+    color: '#3730a3',
     fontSize: 14,
+    fontWeight: '700',
   },
-  empty: {
+  refreshButton: {
     flex: 1,
-    paddingTop: 80,
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    paddingVertical: 12,
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#d1d5db',
   },
-  emptyTitle: {
+  refreshButtonText: {
+    color: '#111827',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  summaryCard: {
+    marginTop: 16,
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  summaryTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#111827',
+    marginBottom: 8,
+  },
+  summaryText: {
+    marginTop: 4,
+    fontSize: 14,
+    color: '#4b5563',
+  },
+  summaryValue: {
+    fontWeight: '800',
+    color: '#111827',
+  },
+  section: {
+    marginTop: 20,
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#111827',
+  },
+  productsList: {
+    gap: 10,
+    paddingTop: 12,
+  },
+  productCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    minWidth: 120,
+  },
+  productName: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#111827',
+  },
+  productPrice: {
+    marginTop: 6,
+    fontSize: 13,
+    color: '#6b7280',
+  },
+  counterCartBox: {
+    marginTop: 14,
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  counterCartRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  counterCartInfo: {
+    flex: 1,
+    marginRight: 12,
+  },
+  counterCartName: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#111827',
+  },
+  counterCartMeta: {
+    marginTop: 4,
+    fontSize: 13,
+    color: '#6b7280',
+  },
+  counterCartActions: {
+    alignItems: 'flex-end',
+  },
+  qtyButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    backgroundColor: '#eef2ff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 6,
+  },
+  qtyButtonText: {
     fontSize: 18,
     fontWeight: '800',
-    color: COLORS.text,
+    color: '#3730a3',
+  },
+  counterCartTotal: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#111827',
+  },
+  totalRow: {
+    marginTop: 4,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  totalLabel: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#111827',
+  },
+  totalValue: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#111827',
+  },
+  primaryCounterButton: {
+    marginTop: 14,
+    backgroundColor: '#111827',
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  primaryCounterButtonText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  listContent: {
+    paddingTop: 12,
+    gap: 12,
+  },
+  saleCard: {
+    backgroundColor: '#ffffff',
+    padding: 16,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  saleTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#111827',
+  },
+  saleMeta: {
+    marginTop: 6,
+    fontSize: 14,
+    color: '#4b5563',
+  },
+  validateButton: {
+    marginTop: 14,
+    backgroundColor: '#111827',
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  validateButtonText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '700',
   },
   emptyText: {
-    marginTop: 8,
-    fontSize: 14,
-    color: COLORS.textLight,
-    textAlign: 'center',
-    lineHeight: 20,
-    paddingHorizontal: 20,
+    marginTop: 12,
+    color: '#6b7280',
   },
 });

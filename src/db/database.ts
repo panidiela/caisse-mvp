@@ -1,15 +1,107 @@
-import * as SQLite from 'expo-sqlite';
-import type { Order, Product, Table, User, Zone } from '../types';
-import { MOCK_PRODUCTS, MOCK_TABLES } from '../data/mockData';
+import { getDb } from './client';
+import { initDatabase } from './init';
+import { initStockTable } from './stock.persistence';
 
-const db = SQLite.openDatabaseSync('caisse.db');
+type LegacyTable = {
+  id: string;
+  name: string;
+  zoneId?: string | null;
+  status?: string;
+  isActive?: boolean;
+  createdAt?: string;
+};
+
+type LegacyProduct = {
+  id: string;
+  name: string;
+  price: number;
+  category?: string | null;
+  barcode?: string | null;
+  isBarcodeBased?: boolean;
+  isActive?: boolean;
+  createdAt?: string;
+};
+
+type LegacyOrderItem = {
+  id: string;
+  productId: string;
+  productNameSnapshot: string;
+  unitPriceSnapshot: number;
+  quantity: number;
+  lineTotal: number;
+};
+
+type LegacyOrderPayment = {
+  method: 'cash' | 'mobile_money' | 'other';
+  amountReceived: number;
+  changeGiven: number;
+  paidAt: string;
+  cashierUserId: string;
+} | null;
+
+type LegacyOrder = {
+  id: string;
+  tableId?: string | null;
+  zoneId?: string | null;
+  sourceType?: string;
+  status: 'open' | 'waiting_payment' | 'paid' | 'cancelled';
+  createdAt: string;
+  updatedAt: string;
+  createdByUserId: string;
+  subtotal: number;
+  total: number;
+  items: LegacyOrderItem[];
+  payment?: LegacyOrderPayment;
+};
+
+type LegacyUser = {
+  id: string;
+  name: string;
+  identifier?: string;
+  pin?: string;
+  role: string;
+  isActive?: boolean;
+  createdAt?: string;
+};
+
+type LegacyZone = {
+  id: string;
+  name: string;
+  isActive?: boolean;
+  createdAt?: string;
+};
+
+const db = getDb();
+
+const DEFAULT_TABLES: LegacyTable[] = [
+  { id: 't1', name: 'Table 1', status: 'free' },
+  { id: 't2', name: 'Table 2', status: 'free' },
+  { id: 't3', name: 'Table 3', status: 'free' },
+  { id: 't4', name: 'Table 4', status: 'free' },
+];
+
+const DEFAULT_PRODUCTS: LegacyProduct[] = [
+  { id: 'p1', name: 'Castel Bière 65cl', price: 700, category: 'Bières', isActive: true },
+  { id: 'p2', name: '33 Export 65cl', price: 700, category: 'Bières', isActive: true },
+  { id: 'p3', name: 'Guinness 65cl', price: 800, category: 'Bières', isActive: true },
+  { id: 'p4', name: 'Coca-Cola 50cl', price: 500, category: 'Sodas', isActive: true },
+  { id: 'p5', name: 'Fanta Orange 50cl', price: 500, category: 'Sodas', isActive: true },
+  { id: 'p6', name: 'Eau minérale 1.5L', price: 400, category: 'Eaux', isActive: true },
+];
+
+function toDbBoolean(value: boolean): number {
+  return value ? 1 : 0;
+}
+
+function fromDbBoolean(value: unknown, fallback = false): boolean {
+  if (value === 1 || value === '1' || value === true) return true;
+  if (value === 0 || value === '0' || value === false) return false;
+  return fallback;
+}
 
 function hasColumn(tableName: string, columnName: string): boolean {
   try {
-    const rows = db.getAllSync(`PRAGMA table_info(${tableName})`) as Array<{
-      name: string;
-    }>;
-
+    const rows = db.getAllSync(`PRAGMA table_info(${tableName})`) as Array<{ name: string }>;
     return rows.some((row) => row.name === columnName);
   } catch {
     return false;
@@ -26,17 +118,7 @@ function ensureColumn(tableName: string, columnName: string, definition: string)
   }
 }
 
-function toDbBoolean(value: boolean): number {
-  return value ? 1 : 0;
-}
-
-function fromDbBoolean(value: unknown, fallback = false): boolean {
-  if (value === 1 || value === '1' || value === true) return true;
-  if (value === 0 || value === '0' || value === false) return false;
-  return fallback;
-}
-
-function rowToTable(row: any): Table {
+function rowToTable(row: any): LegacyTable {
   return {
     id: row.id,
     name: row.name,
@@ -47,7 +129,41 @@ function rowToTable(row: any): Table {
   };
 }
 
-function rowToOrder(row: any): Order {
+function rowToProduct(row: any): LegacyProduct {
+  return {
+    id: row.id,
+    name: row.name,
+    price: Number(row.price ?? 0),
+    category: row.category ?? row.category_id ?? null,
+    barcode: row.barcode ?? null,
+    isBarcodeBased: fromDbBoolean(row.isBarcodeBased, false),
+    isActive: fromDbBoolean(row.isActive ?? row.is_active, true),
+    createdAt: row.createdAt ?? new Date().toISOString(),
+  };
+}
+
+function rowToUser(row: any): LegacyUser {
+  return {
+    id: row.id,
+    name: row.name,
+    identifier: row.identifier ?? '',
+    pin: row.pin ?? '',
+    role: row.role,
+    isActive: fromDbBoolean(row.isActive ?? row.is_active, true),
+    createdAt: row.createdAt ?? new Date().toISOString(),
+  };
+}
+
+function rowToZone(row: any): LegacyZone {
+  return {
+    id: row.id,
+    name: row.name,
+    isActive: fromDbBoolean(row.isActive, true),
+    createdAt: row.createdAt ?? new Date().toISOString(),
+  };
+}
+
+function rowToOrder(row: any): LegacyOrder {
   const items = (db.getAllSync(
     'SELECT * FROM order_items WHERE orderId = ? ORDER BY rowid ASC',
     row.id
@@ -87,28 +203,7 @@ function rowToOrder(row: any): Order {
   };
 }
 
-function rowToUser(row: any): User {
-  return {
-    id: row.id,
-    name: row.name,
-    identifier: row.identifier ?? '',
-    pin: row.pin ?? '',
-    role: row.role,
-    isActive: fromDbBoolean(row.isActive, true),
-    createdAt: row.createdAt ?? new Date().toISOString(),
-  };
-}
-
-function rowToZone(row: any): Zone {
-  return {
-    id: row.id,
-    name: row.name,
-    isActive: fromDbBoolean(row.isActive, true),
-    createdAt: row.createdAt ?? new Date().toISOString(),
-  };
-}
-
-function insertOrderItem(orderId: string, item: Order['items'][number]) {
+function insertOrderItem(orderId: string, item: LegacyOrderItem) {
   db.runSync(
     `INSERT INTO order_items
       (id, orderId, productId, productNameSnapshot, unitPriceSnapshot, quantity, lineTotal)
@@ -124,28 +219,26 @@ function insertOrderItem(orderId: string, item: Order['items'][number]) {
 }
 
 export function initDB() {
+  initDatabase();
+  initStockTable();
+
   db.execSync(`
     PRAGMA journal_mode = WAL;
 
     CREATE TABLE IF NOT EXISTS tables (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'free'
-    );
-
-    CREATE TABLE IF NOT EXISTS products (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      price REAL NOT NULL,
-      category TEXT,
-      barcode TEXT,
-      isBarcodeBased INTEGER NOT NULL DEFAULT 0,
-      isActive INTEGER NOT NULL DEFAULT 1
+      zoneId TEXT,
+      status TEXT NOT NULL DEFAULT 'free',
+      isActive INTEGER NOT NULL DEFAULT 1,
+      createdAt TEXT
     );
 
     CREATE TABLE IF NOT EXISTS orders (
       id TEXT PRIMARY KEY,
       tableId TEXT,
+      zoneId TEXT,
+      sourceType TEXT NOT NULL DEFAULT 'counter',
       status TEXT NOT NULL DEFAULT 'open',
       createdAt TEXT NOT NULL,
       updatedAt TEXT NOT NULL,
@@ -166,11 +259,10 @@ export function initDB() {
       productNameSnapshot TEXT NOT NULL,
       unitPriceSnapshot REAL NOT NULL,
       quantity INTEGER NOT NULL DEFAULT 1,
-      lineTotal REAL NOT NULL,
-      FOREIGN KEY (orderId) REFERENCES orders(id)
+      lineTotal REAL NOT NULL
     );
 
-    CREATE TABLE IF NOT EXISTS users (
+    CREATE TABLE IF NOT EXISTS users_legacy (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       role TEXT NOT NULL,
@@ -180,7 +272,7 @@ export function initDB() {
       createdAt TEXT
     );
 
-    CREATE TABLE IF NOT EXISTS zones (
+    CREATE TABLE IF NOT EXISTS zones_legacy (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       isActive INTEGER NOT NULL DEFAULT 1,
@@ -192,121 +284,94 @@ export function initDB() {
   ensureColumn('tables', 'isActive', 'INTEGER NOT NULL DEFAULT 1');
   ensureColumn('tables', 'createdAt', 'TEXT');
 
-  ensureColumn('products', 'createdAt', 'TEXT');
-
-  ensureColumn('orders', 'zoneId', 'TEXT');
-  ensureColumn('orders', 'sourceType', `TEXT NOT NULL DEFAULT 'counter'`);
-
-  ensureColumn('users', 'identifier', 'TEXT');
-  ensureColumn('users', 'pin', 'TEXT');
-  ensureColumn('users', 'isActive', 'INTEGER NOT NULL DEFAULT 1');
-  ensureColumn('users', 'createdAt', 'TEXT');
-
-  ensureColumn('zones', 'isActive', 'INTEGER NOT NULL DEFAULT 1');
-  ensureColumn('zones', 'createdAt', 'TEXT');
-
-  try {
-    db.execSync(`
-      CREATE INDEX IF NOT EXISTS idx_orders_tableId ON orders(tableId);
-      CREATE INDEX IF NOT EXISTS idx_orders_zoneId ON orders(zoneId);
-      CREATE INDEX IF NOT EXISTS idx_order_items_orderId ON order_items(orderId);
-    `);
-  } catch (error) {
-    console.error('Failed to create indexes', error);
-  }
-
   const now = new Date().toISOString();
 
-  const tableCount = db.getFirstSync<{ count: number }>(
+  const tablesCount = db.getFirstSync<{ count: number }>(
     'SELECT COUNT(*) as count FROM tables'
   );
-
-  if (!tableCount || tableCount.count === 0) {
-    for (const table of MOCK_TABLES) {
+  if (!tablesCount || tablesCount.count === 0) {
+    for (const table of DEFAULT_TABLES) {
       db.runSync(
         `INSERT INTO tables (id, name, zoneId, status, isActive, createdAt)
          VALUES (?, ?, ?, ?, ?, ?)`,
         table.id,
         table.name,
-        (table as any).zoneId ?? null,
+        table.zoneId ?? null,
         table.status ?? 'free',
-        toDbBoolean((table as any).isActive ?? true),
-        (table as any).createdAt ?? now
+        toDbBoolean(table.isActive ?? true),
+        table.createdAt ?? now
       );
-    }
-  } else {
-    try {
-      db.runSync(
-        `UPDATE tables
-         SET isActive = COALESCE(isActive, 1),
-             createdAt = COALESCE(createdAt, ?)
-         WHERE createdAt IS NULL OR createdAt = ''`,
-        now
-      );
-    } catch (error) {
-      console.error('Failed to normalize existing tables', error);
     }
   }
 
-  const productCount = db.getFirstSync<{ count: number }>(
+  const productsCount = db.getFirstSync<{ count: number }>(
     'SELECT COUNT(*) as count FROM products'
   );
-
-  if (!productCount || productCount.count === 0) {
-    for (const product of MOCK_PRODUCTS) {
+  if (!productsCount || productsCount.count === 0) {
+    for (const product of DEFAULT_PRODUCTS) {
       db.runSync(
-        `INSERT INTO products
-          (id, name, price, category, barcode, isBarcodeBased, isActive, createdAt)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO products (id, name, price, category_id, stock_quantity, unit, is_active)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
         product.id,
         product.name,
         product.price,
         product.category ?? null,
-        (product as any).barcode ?? null,
-        toDbBoolean((product as any).isBarcodeBased ?? false),
-        toDbBoolean((product as any).isActive ?? true),
-        (product as any).createdAt ?? now
+        0,
+        null,
+        toDbBoolean(product.isActive ?? true)
       );
-    }
-  } else {
-    try {
-      db.runSync(
-        `UPDATE products
-         SET createdAt = COALESCE(createdAt, ?)
-         WHERE createdAt IS NULL OR createdAt = ''`,
-        now
-      );
-    } catch (error) {
-      console.error('Failed to normalize existing products', error);
     }
   }
 
   try {
-    db.runSync(
-      `UPDATE users
-       SET isActive = COALESCE(isActive, 1),
-           createdAt = COALESCE(createdAt, ?)
-       WHERE createdAt IS NULL OR createdAt = ''`,
-      now
+    const users = (db.getAllSync('SELECT * FROM users') ?? []) as any[];
+    const legacyUsersCount = db.getFirstSync<{ count: number }>(
+      'SELECT COUNT(*) as count FROM users_legacy'
     );
+
+    if ((!legacyUsersCount || legacyUsersCount.count === 0) && users.length > 0) {
+      for (const user of users) {
+        db.runSync(
+          `INSERT INTO users_legacy (id, name, role, identifier, pin, isActive, createdAt)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          user.id,
+          user.name ?? '',
+          user.role,
+          user.identifier ?? '',
+          user.pin ?? '',
+          user.is_active ?? 1,
+          now
+        );
+      }
+    }
   } catch (error) {
-    console.error('Failed to normalize existing users', error);
+    console.error('Legacy users sync failed', error);
   }
 
   try {
-    db.runSync(
-      `UPDATE zones
-       SET isActive = COALESCE(isActive, 1),
-           createdAt = COALESCE(createdAt, ?)
-       WHERE createdAt IS NULL OR createdAt = ''`,
-      now
+    const zones = (db.getAllSync('SELECT * FROM zones') ?? []) as any[];
+    const legacyZonesCount = db.getFirstSync<{ count: number }>(
+      'SELECT COUNT(*) as count FROM zones_legacy'
     );
+
+    if ((!legacyZonesCount || legacyZonesCount.count === 0) && zones.length > 0) {
+      for (const zone of zones) {
+        db.runSync(
+          `INSERT INTO zones_legacy (id, name, isActive, createdAt)
+           VALUES (?, ?, ?, ?)`,
+          zone.id,
+          zone.name,
+          1,
+          now
+        );
+      }
+    }
   } catch (error) {
-    console.error('Failed to normalize existing zones', error);
+    console.error('Legacy zones sync failed', error);
   }
 }
 
-export function getTables(): Table[] {
+export function getTables(): LegacyTable[] {
   const rows = (db.getAllSync(
     'SELECT * FROM tables WHERE isActive = 1 ORDER BY name ASC'
   ) ?? []) as any[];
@@ -314,12 +379,10 @@ export function getTables(): Table[] {
   return rows.map(rowToTable);
 }
 
-export function replaceTables(tables: Table[]) {
+export function replaceTables(tables: LegacyTable[]) {
   db.execSync('BEGIN TRANSACTION;');
-
   try {
     db.runSync('DELETE FROM tables');
-
     for (const table of tables) {
       db.runSync(
         `INSERT INTO tables (id, name, zoneId, status, isActive, createdAt)
@@ -327,12 +390,11 @@ export function replaceTables(tables: Table[]) {
         table.id,
         table.name,
         table.zoneId ?? null,
-        table.status,
-        toDbBoolean(table.isActive),
-        table.createdAt
+        table.status ?? 'free',
+        toDbBoolean(table.isActive ?? true),
+        table.createdAt ?? new Date().toISOString()
       );
     }
-
     db.execSync('COMMIT;');
   } catch (error) {
     db.execSync('ROLLBACK;');
@@ -340,44 +402,23 @@ export function replaceTables(tables: Table[]) {
   }
 }
 
-export function updateTableStatus(id: string, status: Table['status']) {
+export function updateTableStatus(id: string, status: string) {
   db.runSync('UPDATE tables SET status = ? WHERE id = ?', status, id);
 }
 
-export function getProducts(): Product[] {
+export function getProducts(): LegacyProduct[] {
   const rows = (db.getAllSync(
-    'SELECT * FROM products WHERE isActive = 1 ORDER BY category, name'
+    'SELECT id, name, price, category_id, is_active FROM products ORDER BY name ASC'
   ) ?? []) as any[];
 
-  return rows.map((row) => ({
-    id: row.id,
-    name: row.name,
-    price: Number(row.price ?? 0),
-    category: row.category ?? null,
-    isActive: fromDbBoolean(row.isActive, true),
-    createdAt: row.createdAt ?? new Date().toISOString(),
-  }));
+  return rows.map(rowToProduct);
 }
 
-export function getProductByBarcode(barcode: string): Product | null {
-  const row = db.getFirstSync(
-    'SELECT * FROM products WHERE barcode = ? AND isActive = 1',
-    barcode
-  ) as any;
-
-  if (!row) return null;
-
-  return {
-    id: row.id,
-    name: row.name,
-    price: Number(row.price ?? 0),
-    category: row.category ?? null,
-    isActive: fromDbBoolean(row.isActive, true),
-    createdAt: row.createdAt ?? new Date().toISOString(),
-  };
+export function getProductByBarcode(_barcode: string): LegacyProduct | null {
+  return null;
 }
 
-export function getOrders(): Order[] {
+export function getOrders(): LegacyOrder[] {
   const rows = (db.getAllSync(
     'SELECT * FROM orders ORDER BY createdAt DESC'
   ) ?? []) as any[];
@@ -385,30 +426,26 @@ export function getOrders(): Order[] {
   return rows.map(rowToOrder);
 }
 
-export function getOrderById(id: string): Order | null {
+export function getOrderById(id: string): LegacyOrder | null {
   const row = db.getFirstSync('SELECT * FROM orders WHERE id = ?', id) as any;
-
   if (!row) return null;
-
   return rowToOrder(row);
 }
 
-export function getOpenOrderForTable(tableId: string): Order | null {
+export function getOpenOrderForTable(tableId: string): LegacyOrder | null {
   const row = db.getFirstSync(
     `SELECT * FROM orders
-     WHERE tableId = ?
-       AND status NOT IN ('paid', 'cancelled')
+     WHERE tableId = ? AND status NOT IN ('paid', 'cancelled')
      ORDER BY updatedAt DESC
      LIMIT 1`,
     tableId
   ) as any;
 
   if (!row) return null;
-
   return rowToOrder(row);
 }
 
-export function createOrder(order: Order) {
+export function createOrder(order: LegacyOrder) {
   db.runSync(
     `INSERT INTO orders
       (id, tableId, zoneId, sourceType, status, createdAt, updatedAt, createdByUserId, subtotal, total,
@@ -417,7 +454,7 @@ export function createOrder(order: Order) {
     order.id,
     order.tableId ?? null,
     order.zoneId ?? null,
-    order.sourceType,
+    order.sourceType ?? 'counter',
     order.status,
     order.createdAt,
     order.updatedAt,
@@ -436,25 +473,15 @@ export function createOrder(order: Order) {
   }
 }
 
-export function updateOrder(order: Order) {
+export function updateOrder(order: LegacyOrder) {
   db.runSync(
     `UPDATE orders
-     SET tableId = ?,
-         zoneId = ?,
-         sourceType = ?,
-         status = ?,
-         updatedAt = ?,
-         subtotal = ?,
-         total = ?,
-         paymentMethod = ?,
-         paymentAmountReceived = ?,
-         paymentChangeGiven = ?,
-         paymentPaidAt = ?,
-         paymentCashierUserId = ?
+     SET tableId = ?, zoneId = ?, sourceType = ?, status = ?, updatedAt = ?, subtotal = ?, total = ?,
+         paymentMethod = ?, paymentAmountReceived = ?, paymentChangeGiven = ?, paymentPaidAt = ?, paymentCashierUserId = ?
      WHERE id = ?`,
     order.tableId ?? null,
     order.zoneId ?? null,
-    order.sourceType,
+    order.sourceType ?? 'counter',
     order.status,
     order.updatedAt,
     order.subtotal,
@@ -468,20 +495,15 @@ export function updateOrder(order: Order) {
   );
 
   db.runSync('DELETE FROM order_items WHERE orderId = ?', order.id);
-
   for (const item of order.items) {
     insertOrderItem(order.id, item);
   }
 }
 
-// =========================
-// USERS
-// =========================
-
-export function getUsers(): User[] {
+export function getUsers(): LegacyUser[] {
   try {
     const rows = (db.getAllSync(
-      'SELECT * FROM users WHERE isActive = 1 ORDER BY name ASC'
+      'SELECT id, name, identifier, pin, role, is_active FROM users ORDER BY name ASC'
     ) ?? []) as any[];
 
     return rows.map(rowToUser);
@@ -491,14 +513,10 @@ export function getUsers(): User[] {
   }
 }
 
-// =========================
-// ZONES
-// =========================
-
-export function getZones(): Zone[] {
+export function getZones(): LegacyZone[] {
   try {
     const rows = (db.getAllSync(
-      'SELECT * FROM zones WHERE isActive = 1 ORDER BY name ASC'
+      'SELECT id, name FROM zones ORDER BY name ASC'
     ) ?? []) as any[];
 
     return rows.map(rowToZone);
@@ -507,3 +525,6 @@ export function getZones(): Zone[] {
     return [];
   }
 }
+
+export { getDb } from './client';
+export { initDatabase } from './init';
