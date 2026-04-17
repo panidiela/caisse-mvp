@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   FlatList,
@@ -22,8 +22,16 @@ type Sale = {
   id: string;
   tableId?: string | null;
   sourceLabel?: string | null;
+  serverId?: string | null;
   status: 'DRAFT' | 'SENT' | 'MONEY_COLLECTED' | 'PAID' | 'CANCELLED';
   totalAmount: number;
+};
+
+type TableAssignment = {
+  id: string;
+  tableId: string;
+  serverUserId: string;
+  assignedAt: string;
 };
 
 export default function ServerOrderScreen() {
@@ -37,6 +45,9 @@ export default function ServerOrderScreen() {
   const currentUser = useStore((s) => s.currentUser);
   const products = useStore((s) => (s.products ?? []) as Product[]);
   const orders = useStore((s) => (s.orders ?? []) as Sale[]);
+  const tableAssignments = useStore(
+    (s) => (s.tableAssignments ?? []) as TableAssignment[]
+  );
   const createSale = useStore((s) => s.createSale);
   const updateSaleStatus = useStore((s) => s.updateSaleStatus);
 
@@ -44,25 +55,63 @@ export default function ServerOrderScreen() {
   const [status, setStatus] = useState<LocalSaleStatus>('DRAFT');
   const [savedSaleId, setSavedSaleId] = useState<string | null>(null);
 
+  const tableId =
+    typeof params.tableId === 'string' && params.tableId.length > 0
+      ? params.tableId
+      : null;
+
   const sourceLabel =
     typeof params.sourceLabel === 'string' && params.sourceLabel.length > 0
       ? params.sourceLabel
       : 'Commande';
 
+  const hasAnyAssignments = tableAssignments.length > 0;
+
+  const currentAssignment = useMemo(() => {
+    if (!tableId) return null;
+    return tableAssignments.find((item) => item.tableId === tableId) ?? null;
+  }, [tableAssignments, tableId]);
+
+  const isAllowed = useMemo(() => {
+    if (!tableId) return true;
+    if (!hasAnyAssignments) return true;
+    if (!currentAssignment) return false;
+    return currentAssignment.serverUserId === currentUser?.id;
+  }, [tableId, hasAnyAssignments, currentAssignment, currentUser?.id]);
+
+  const effectiveServerId = useMemo(() => {
+    if (tableId && currentAssignment?.serverUserId) {
+      return currentAssignment.serverUserId;
+    }
+    return currentUser?.id ?? null;
+  }, [tableId, currentAssignment, currentUser?.id]);
+
+  useEffect(() => {
+    if (!isAllowed) {
+      Alert.alert('Accès refusé', "Cette table ne t'est pas affectée.");
+      router.replace('/(server)/tables');
+    }
+  }, [isAllowed]);
+
   const existingActiveSale = useMemo(() => {
-    if (!params.tableId || typeof params.tableId !== 'string') return null;
+    if (!tableId) return null;
 
     return (
       orders.find(
         (sale) =>
-          sale.tableId === params.tableId &&
+          sale.tableId === tableId &&
           sale.status !== 'PAID' &&
           sale.status !== 'CANCELLED'
       ) ?? null
     );
-  }, [orders, params.tableId]);
+  }, [orders, tableId]);
 
   const addToCart = (product: Product) => {
+    if (!isAllowed) {
+      Alert.alert('Accès refusé', "Cette table ne t'est pas affectée.");
+      return;
+    }
+
     if (savedSaleId) {
       Alert.alert(
         'Commande verrouillée',
@@ -102,6 +151,11 @@ export default function ServerOrderScreen() {
   };
 
   const decreaseQty = (productId: string) => {
+    if (!isAllowed) {
+      Alert.alert('Accès refusé', "Cette table ne t'est pas affectée.");
+      return;
+    }
+
     if (savedSaleId) {
       Alert.alert(
         'Commande verrouillée',
@@ -125,6 +179,7 @@ export default function ServerOrderScreen() {
   );
 
   const canSend =
+    isAllowed &&
     items.length > 0 &&
     status === 'DRAFT' &&
     !savedSaleId &&
@@ -133,13 +188,15 @@ export default function ServerOrderScreen() {
   const canMarkMoneyCollected = savedSaleId !== null && status === 'SENT';
 
   const handleShowToCustomer = () => {
-    if (!canSend || !currentUser) return;
+    if (!canSend) return;
+
+    if (!effectiveServerId) {
+      Alert.alert('Erreur', 'Aucune serveuse valide trouvée pour cette table.');
+      return;
+    }
 
     const saleId = createSale({
-      tableId:
-        typeof params.tableId === 'string' && params.tableId.length > 0
-          ? params.tableId
-          : null,
+      tableId,
       zoneId:
         typeof params.zoneId === 'string' && params.zoneId.length > 0
           ? params.zoneId
@@ -147,7 +204,7 @@ export default function ServerOrderScreen() {
       sourceType:
         (typeof params.sourceType === 'string' && params.sourceType) || 'free',
       sourceLabel,
-      serverId: currentUser.id,
+      serverId: effectiveServerId,
       shiftId: null,
       status: 'SENT',
       items: items.map((item) => ({
@@ -169,7 +226,7 @@ export default function ServerOrderScreen() {
 
     Alert.alert(
       'Commande enregistrée',
-      'La commande a été enregistrée et montrée au client.'
+      'La commande a été enregistrée et liée à la serveuse affectée à cette table.'
     );
   };
 
@@ -200,6 +257,10 @@ export default function ServerOrderScreen() {
     setSavedSaleId(null);
   };
 
+  if (!isAllowed) {
+    return null;
+  }
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
@@ -210,6 +271,16 @@ export default function ServerOrderScreen() {
         <Text style={styles.title}>{sourceLabel}</Text>
         <Text style={styles.subtitle}>
           État actuel : <Text style={styles.statusValue}>{status}</Text>
+        </Text>
+        <Text style={styles.subtitle}>
+          Serveuse liée :{' '}
+          <Text style={styles.statusValue}>
+            {currentAssignment?.serverUserId === currentUser?.id
+              ? 'Moi (table affectée)'
+              : effectiveServerId
+              ? 'Serveuse affectée'
+              : 'Moi'}
+          </Text>
         </Text>
 
         {existingActiveSale && !savedSaleId && (

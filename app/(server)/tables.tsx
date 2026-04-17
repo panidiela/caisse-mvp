@@ -21,8 +21,16 @@ type Sale = {
   id: string;
   tableId?: string | null;
   sourceLabel?: string | null;
+  serverId?: string | null;
   status: 'DRAFT' | 'SENT' | 'MONEY_COLLECTED' | 'PAID' | 'CANCELLED';
   totalAmount: number;
+};
+
+type TableAssignment = {
+  id: string;
+  tableId: string;
+  serverUserId: string;
+  assignedAt: string;
 };
 
 export default function ServerTablesScreen() {
@@ -30,22 +38,49 @@ export default function ServerTablesScreen() {
   const logout = useStore((s) => s.logout);
   const tables = useStore((s) => (s.tables ?? []) as TableItem[]);
   const orders = useStore((s) => (s.orders ?? []) as Sale[]);
+  const tableAssignments = useStore(
+    (s) => (s.tableAssignments ?? []) as TableAssignment[]
+  );
 
   const handleLogout = () => {
     logout();
     router.replace('/login');
   };
 
-  const tableCards = useMemo(() => {
-    return tables.map((table) => {
-      const activeSale = orders.find(
-        (sale) =>
-          sale.tableId === table.id &&
-          sale.status !== 'PAID' &&
-          sale.status !== 'CANCELLED'
-      );
+  const hasAnyAssignments = tableAssignments.length > 0;
 
-      const uiStatus = activeSale ? activeSale.status : 'FREE';
+  const visibleTables = useMemo(() => {
+    if (!hasAnyAssignments) {
+      return tables;
+    }
+
+    const myAssignedTableIds = new Set(
+      tableAssignments
+        .filter((item) => item.serverUserId === currentUser?.id)
+        .map((item) => item.tableId)
+    );
+
+    return tables.filter((table) => myAssignedTableIds.has(table.id));
+  }, [tables, tableAssignments, currentUser?.id, hasAnyAssignments]);
+
+  const tableCards = useMemo(() => {
+    return visibleTables.map((table) => {
+      const activeSale =
+        orders.find(
+          (sale) =>
+            sale.tableId === table.id &&
+            sale.status !== 'PAID' &&
+            sale.status !== 'CANCELLED'
+        ) ?? null;
+
+      const assignment =
+        tableAssignments.find((item) => item.tableId === table.id) ?? null;
+
+      const isAssignedToMe =
+        !!currentUser?.id && assignment?.serverUserId === currentUser.id;
+
+      const isToTake = isAssignedToMe && !activeSale;
+      const uiStatus = isToTake ? 'TO_TAKE' : activeSale ? activeSale.status : 'FREE';
 
       return {
         ...table,
@@ -53,22 +88,25 @@ export default function ServerTablesScreen() {
         uiStatus,
       };
     });
-  }, [tables, orders]);
+  }, [visibleTables, orders, tableAssignments, currentUser?.id]);
 
   const summary = useMemo(() => {
     const free = tableCards.filter((item) => item.uiStatus === 'FREE').length;
+    const toTake = tableCards.filter((item) => item.uiStatus === 'TO_TAKE').length;
     const sent = tableCards.filter((item) => item.uiStatus === 'SENT').length;
     const collected = tableCards.filter(
       (item) => item.uiStatus === 'MONEY_COLLECTED'
     ).length;
 
     return {
-      total: tableCards.length,
+      totalVisible: tableCards.length,
+      hasAnyAssignments,
       free,
+      toTake,
       sent,
       collected,
     };
-  }, [tableCards]);
+  }, [tableCards, hasAnyAssignments]);
 
   const goToTableOrder = (tableId: string, tableName: string) => {
     router.push({
@@ -82,6 +120,14 @@ export default function ServerTablesScreen() {
   };
 
   const getBadgeStyle = (status: string) => {
+    if (status === 'TO_TAKE') {
+      return {
+        container: styles.badgeToTake,
+        text: styles.badgeToTakeText,
+        label: 'À prendre',
+      };
+    }
+
     if (status === 'FREE') {
       return {
         container: styles.badgeFree,
@@ -119,7 +165,7 @@ export default function ServerTablesScreen() {
         <View style={styles.topBar}>
           <View style={styles.topBarLeft}>
             <Text style={styles.brand}>Yewo</Text>
-            <Text style={styles.title}>Tables</Text>
+            <Text style={styles.title}>Mes tables</Text>
             <Text style={styles.subtitle}>
               Connecté : {currentUser?.name || currentUser?.identifier || 'Serveuse'}
             </Text>
@@ -131,9 +177,18 @@ export default function ServerTablesScreen() {
         </View>
 
         <View style={styles.summaryCard}>
-          <Text style={styles.summaryTitle}>Résumé salle</Text>
+          <Text style={styles.summaryTitle}>Résumé service</Text>
           <Text style={styles.summaryText}>
-            Total tables : <Text style={styles.summaryValue}>{summary.total}</Text>
+            Affectation active :{' '}
+            <Text style={styles.summaryValue}>
+              {hasAnyAssignments ? 'Oui' : 'Non'}
+            </Text>
+          </Text>
+          <Text style={styles.summaryText}>
+            Tables visibles : <Text style={styles.summaryValue}>{summary.totalVisible}</Text>
+          </Text>
+          <Text style={styles.summaryText}>
+            Tables à prendre : <Text style={styles.summaryValue}>{summary.toTake}</Text>
           </Text>
           <Text style={styles.summaryText}>
             Libres : <Text style={styles.summaryValue}>{summary.free}</Text>
@@ -146,10 +201,16 @@ export default function ServerTablesScreen() {
           </Text>
         </View>
 
-        <Text style={styles.sectionTitle}>Choisir une table</Text>
+        <Text style={styles.sectionTitle}>
+          {hasAnyAssignments ? 'Tables qui me sont affectées' : 'Toutes les tables'}
+        </Text>
 
         {tableCards.length === 0 ? (
-          <Text style={styles.emptyText}>Aucune table disponible.</Text>
+          <Text style={styles.emptyText}>
+            {hasAnyAssignments
+              ? "Aucune table ne t'est affectée pour le moment."
+              : 'Aucune table disponible.'}
+          </Text>
         ) : (
           tableCards.map((table) => {
             const badge = getBadgeStyle(table.uiStatus);
@@ -157,7 +218,7 @@ export default function ServerTablesScreen() {
             return (
               <Pressable
                 key={table.id}
-                style={styles.tableCard}
+                style={[styles.tableCard, table.uiStatus === 'TO_TAKE' && styles.toTakeCard]}
                 onPress={() => goToTableOrder(table.id, table.name)}
               >
                 <View style={styles.tableTopRow}>
@@ -173,6 +234,8 @@ export default function ServerTablesScreen() {
                 <Text style={styles.tableMeta}>
                   {table.activeSale
                     ? `Commande en cours • ${table.activeSale.totalAmount} FCFA`
+                    : table.uiStatus === 'TO_TAKE'
+                    ? 'Table affectée, en attente de prise'
                     : 'Aucune commande en cours'}
                 </Text>
 
@@ -274,6 +337,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#e5e7eb',
   },
+  toTakeCard: {
+    borderColor: '#8b5cf6',
+    borderWidth: 2,
+  },
   tableTopRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -328,5 +395,11 @@ const styles = StyleSheet.create({
   },
   badgeOtherText: {
     color: '#374151',
+  },
+  badgeToTake: {
+    backgroundColor: '#ede9fe',
+  },
+  badgeToTakeText: {
+    color: '#6d28d9',
   },
 });

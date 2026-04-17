@@ -7,6 +7,7 @@ import type {
   SaleSourceType,
   SetupPayload,
   Table,
+  TableAssignment,
   User,
   UserRole,
   Zone,
@@ -59,10 +60,13 @@ export interface PlanSlice {
 
 export interface DataSlice {
   products: Product[];
+  tableAssignments: TableAssignment[];
   initApp: () => void;
   refreshTables: () => void;
   refreshProducts: () => void;
   refreshOrders: () => void;
+  assignServerToTable: (tableId: string, serverUserId: string) => void;
+  clearTableAssignment: (tableId: string) => void;
 }
 
 export interface OrdersSlice {
@@ -99,4 +103,4 @@ export type AppState = AuthSlice &
   OrdersSlice &
   HydrationSlice;
 
-export type AppSliceCreator<TSlice> = StateCreator<AppState, [], [], TSlice>;
+export type AppSliceCreator<TSlice = any> = StateCreator<AppState, [], [], TSlice>;

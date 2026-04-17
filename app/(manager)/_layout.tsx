@@ -8,7 +8,7 @@ function canAccessManager(role?: AppRole | null): boolean {
   return role === 'manager' || role === 'admin';
 }
 
-function canAccessStock(role?: AppRole | null): boolean {
+function canAccessFloorManager(role?: AppRole | null): boolean {
   return role === 'stockist' || role === 'manager' || role === 'admin';
 }
 
@@ -16,10 +16,10 @@ export default function ManagerLayout() {
   const currentUser = useStore((s) => s.currentUser);
   const pathname = usePathname();
 
-  const isStockRoute = pathname?.includes('/stock');
+  const isFloorRoute = pathname?.includes('/stock');
 
-  if (isStockRoute) {
-    if (!canAccessStock(currentUser?.role as AppRole | null | undefined)) {
+  if (isFloorRoute) {
+    if (!canAccessFloorManager(currentUser?.role as AppRole | null | undefined)) {
       return <Redirect href="/login" />;
     }
   } else {

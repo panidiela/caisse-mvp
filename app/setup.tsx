@@ -57,8 +57,8 @@ export default function SetupScreen() {
             role: 'server',
           },
           {
-            name: 'Stockiste Démo',
-            identifier: 'stock',
+            name: 'Chef de salle Démo',
+            identifier: 'chef',
             pin: '1234',
             role: 'stockist',
           },
@@ -117,7 +117,7 @@ export default function SetupScreen() {
           <Text style={styles.credentials}>• manager / 1234</Text>
           <Text style={styles.credentials}>• caisse / 1234</Text>
           <Text style={styles.credentials}>• serveuse / 1234</Text>
-          <Text style={styles.credentials}>• stock / 1234</Text>
+          <Text style={styles.credentials}>• chef / 1234</Text>
 
           <Pressable
             style={[styles.primaryButton, isSubmitting && styles.buttonDisabled]}

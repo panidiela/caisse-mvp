@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Alert,
   Pressable,
@@ -8,20 +8,43 @@ import {
   Text,
   View,
 } from 'react-native';
-import uuid from 'react-native-uuid';
 import { router } from 'expo-router';
 import { useStore } from '../../src/store/useStore';
-import { adjustStockManually } from '../../src/db/stock.persistence';
-import {
-  getRecentStockMovementsForManager,
-  getStockForManager,
-  type ManagerStockMovementRow,
-  type ManagerStockRow,
-} from '../../src/db/stock.read.persistence';
-import {
-  getRecentShiftDiscrepancies,
-  type ShiftDiscrepancyRow,
-} from '../../src/db/shift.discrepancies.read.persistence';
+
+type TableItem = {
+  id: string;
+  name: string;
+  zoneId?: string | null;
+  status?: string;
+};
+
+type Sale = {
+  id: string;
+  tableId?: string | null;
+  zoneId?: string | null;
+  sourceType?: string | null;
+  sourceLabel?: string | null;
+  serverId?: string | null;
+  status: 'DRAFT' | 'SENT' | 'MONEY_COLLECTED' | 'PAID' | 'CANCELLED';
+  totalAmount: number;
+  createdAt?: string | null;
+  items?: Array<{ id: string }>;
+};
+
+type AppUser = {
+  id: string;
+  name?: string;
+  identifier?: string;
+  role?: string;
+  isActive?: boolean;
+};
+
+type TableAssignment = {
+  id: string;
+  tableId: string;
+  serverUserId: string;
+  assignedAt: string;
+};
 
 function formatDate(value?: string | null) {
   if (!value) return '—';
@@ -30,68 +53,219 @@ function formatDate(value?: string | null) {
   return date.toLocaleString();
 }
 
-export default function StockistScreen() {
-  const currentUser = useStore((s) => s.currentUser);
+export default function FloorManagerScreen() {
+  const currentUser = useStore((s) => s.currentUser as AppUser | null);
   const logout = useStore((s) => s.logout);
+  const tables = useStore((s) => (s.tables ?? []) as TableItem[]);
+  const orders = useStore((s) => (s.orders ?? []) as Sale[]);
+  const users = useStore((s) => (s.users ?? []) as AppUser[]);
+  const tableAssignments = useStore((s) => (s.tableAssignments ?? []) as TableAssignment[]);
+  const hydrateFromDb = useStore((s) => s.hydrateFromDb);
+  const assignServerToTable = useStore((s) => s.assignServerToTable);
+  const clearTableAssignment = useStore((s) => s.clearTableAssignment);
 
-  const [stockRows, setStockRows] = useState<ManagerStockRow[]>(() => getStockForManager());
-  const [stockMovements, setStockMovements] = useState<ManagerStockMovementRow[]>(
-    () => getRecentStockMovementsForManager()
-  );
-  const [shiftDiscrepancies, setShiftDiscrepancies] = useState<ShiftDiscrepancyRow[]>(
-    () => getRecentShiftDiscrepancies()
-  );
-  const [isRefreshing, setIsRefreshing] = useState(false);
   const [lastRefreshLabel, setLastRefreshLabel] = useState<string>('Jamais');
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   const handleLogout = () => {
     logout();
     router.replace('/login');
   };
 
-  const reloadData = () => {
-    setStockRows(getStockForManager());
-    setStockMovements(getRecentStockMovementsForManager());
-    setShiftDiscrepancies(getRecentShiftDiscrepancies());
-    setLastRefreshLabel(new Date().toLocaleString());
-  };
-
-  const handleRefresh = () => {
+  const handleRefresh = async () => {
     if (isRefreshing) return;
 
     try {
       setIsRefreshing(true);
-      reloadData();
+
+      if (typeof hydrateFromDb === 'function') {
+        await Promise.resolve(hydrateFromDb());
+      }
+
+      setLastRefreshLabel(new Date().toLocaleString());
     } catch (error) {
-      console.error('Stock refresh failed', error);
+      console.error('Floor manager refresh failed', error);
     } finally {
       setIsRefreshing(false);
     }
   };
 
-  const handleAdjustStock = (productId: string, delta: number) => {
-    if (!currentUser?.id) {
-      Alert.alert('Erreur', 'Aucun utilisateur connecté.');
+  const servers = useMemo(
+    () => users.filter((user) => user.role === 'server' && user.isActive !== false),
+    [users]
+  );
+
+  const getServerName = (serverId?: string | null) => {
+    if (!serverId) return 'Non attribuée';
+    const user = users.find((item) => item.id === serverId);
+    return user?.name || user?.identifier || 'Serveuse inconnue';
+  };
+
+  const getAssignedServerId = (tableId: string) => {
+    const assignment = tableAssignments.find((item) => item.tableId === tableId);
+    return assignment?.serverUserId ?? null;
+  };
+
+  const cycleAssignment = (tableId: string) => {
+    if (servers.length === 0) {
+      Alert.alert('Aucune serveuse', 'Aucune serveuse active disponible.');
       return;
     }
 
-    try {
-      adjustStockManually({
-        id: uuid.v4() as string,
-        productId,
-        quantityDelta: delta,
-        createdByUserId: currentUser.id,
-        note: delta > 0 ? 'Ajout manuel stockiste' : 'Retrait manuel stockiste',
-      });
+    const currentAssignedServerId = getAssignedServerId(tableId);
+    const currentIndex = servers.findIndex((item) => item.id === currentAssignedServerId);
 
-      reloadData();
-    } catch (error) {
-      console.error('Adjust stock failed', error);
-      Alert.alert('Erreur', "Impossible d'ajuster le stock.");
+    if (currentAssignedServerId === null) {
+      assignServerToTable(tableId, servers[0].id);
+      return;
     }
+
+    if (currentIndex === -1) {
+      assignServerToTable(tableId, servers[0].id);
+      return;
+    }
+
+    const nextIndex = currentIndex + 1;
+
+    if (nextIndex >= servers.length) {
+      clearTableAssignment(tableId);
+      return;
+    }
+
+    assignServerToTable(tableId, servers[nextIndex].id);
   };
 
-  const lowStockCount = stockRows.filter((item) => item.isLowStock).length;
+  const tableOverview = useMemo(() => {
+    return tables.map((table) => {
+      const activeSale =
+        orders.find(
+          (sale) =>
+            sale.tableId === table.id &&
+            sale.status !== 'PAID' &&
+            sale.status !== 'CANCELLED'
+        ) ?? null;
+
+      const assignedServerId = getAssignedServerId(table.id);
+      const isAssigned = !!assignedServerId;
+      const isWaitingToBeTaken = isAssigned && !activeSale;
+
+      return {
+        id: table.id,
+        name: table.name,
+        activeSale,
+        assignedServerId,
+        isWaitingToBeTaken,
+      };
+    });
+  }, [tables, orders, tableAssignments]);
+
+  const liveSales = useMemo(() => {
+    return [...orders]
+      .filter((sale) => sale.status !== 'PAID' && sale.status !== 'CANCELLED')
+      .sort((a, b) => {
+        const aTime = new Date(a.createdAt ?? 0).getTime();
+        const bTime = new Date(b.createdAt ?? 0).getTime();
+        return bTime - aTime;
+      });
+  }, [orders]);
+
+  const serverOverview = useMemo(() => {
+    return servers.map((server) => {
+      const assignedTables = tableOverview.filter(
+        (table) => table.assignedServerId === server.id
+      );
+
+      const tablesWithActiveSales = assignedTables.filter((table) => !!table.activeSale);
+      const tablesWithoutActiveSales = assignedTables.filter((table) => !table.activeSale);
+
+      const sentCount = tablesWithActiveSales.filter(
+        (table) => table.activeSale?.status === 'SENT'
+      ).length;
+
+      const collectedCount = tablesWithActiveSales.filter(
+        (table) => table.activeSale?.status === 'MONEY_COLLECTED'
+      ).length;
+
+      return {
+        serverId: server.id,
+        serverName: server.name || server.identifier || 'Serveuse',
+        assignedCount: assignedTables.length,
+        activeCount: tablesWithActiveSales.length,
+        idleCount: tablesWithoutActiveSales.length,
+        sentCount,
+        collectedCount,
+      };
+    });
+  }, [servers, tableOverview]);
+
+  const unassignedTables = useMemo(
+    () => tableOverview.filter((table) => !table.assignedServerId),
+    [tableOverview]
+  );
+
+  const assignedWithoutOrder = useMemo(
+    () => tableOverview.filter((table) => table.assignedServerId && !table.activeSale),
+    [tableOverview]
+  );
+
+  const summary = useMemo(() => {
+    const tablesFree = tableOverview.filter((item) => !item.activeSale).length;
+    const tablesBusy = tableOverview.filter((item) => !!item.activeSale).length;
+    const sent = liveSales.filter((sale) => sale.status === 'SENT').length;
+    const collected = liveSales.filter(
+      (sale) => sale.status === 'MONEY_COLLECTED'
+    ).length;
+
+    return {
+      tablesTotal: tableOverview.length,
+      tablesFree,
+      tablesBusy,
+      sent,
+      collected,
+      unassigned: unassignedTables.length,
+      assignedWithoutOrder: assignedWithoutOrder.length,
+    };
+  }, [tableOverview, liveSales, unassignedTables, assignedWithoutOrder]);
+
+  const getStatusBadge = (table: {
+    activeSale: Sale | null;
+    isWaitingToBeTaken: boolean;
+  }) => {
+    if (table.isWaitingToBeTaken) {
+      return {
+        container: styles.badgeToTake,
+        text: styles.badgeToTakeText,
+        label: 'À prendre',
+      };
+    }
+
+    switch (table.activeSale?.status) {
+      case 'SENT':
+        return {
+          container: styles.badgeSent,
+          text: styles.badgeSentText,
+          label: 'Envoyée',
+        };
+      case 'MONEY_COLLECTED':
+        return {
+          container: styles.badgeCollected,
+          text: styles.badgeCollectedText,
+          label: 'Argent reçu',
+        };
+      case 'DRAFT':
+        return {
+          container: styles.badgeDraft,
+          text: styles.badgeDraftText,
+          label: 'Brouillon',
+        };
+      default:
+        return {
+          container: styles.badgeFree,
+          text: styles.badgeFreeText,
+          label: 'Libre',
+        };
+    }
+  };
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -99,9 +273,9 @@ export default function StockistScreen() {
         <View style={styles.headerRow}>
           <View style={styles.headerLeft}>
             <Text style={styles.brand}>Yewo</Text>
-            <Text style={styles.title}>Espace stockiste</Text>
+            <Text style={styles.title}>Chef de salle</Text>
             <Text style={styles.subtitle}>
-              Vue dédiée au suivi du stock, aux alertes, aux ajustements et aux écarts de shift.
+              Supervision du service, répartition des tables et suivi des serveuses.
             </Text>
           </View>
 
@@ -119,20 +293,32 @@ export default function StockistScreen() {
             Identifiant : <Text style={styles.value}>{currentUser?.identifier || '—'}</Text>
           </Text>
           <Text style={styles.rowText}>
-            Rôle : <Text style={styles.value}>{currentUser?.role || '—'}</Text>
+            Rôle : <Text style={styles.value}>Chef de salle</Text>
           </Text>
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Résumé stock</Text>
+          <Text style={styles.cardTitle}>Vue service</Text>
           <Text style={styles.rowText}>
-            Produits suivis : <Text style={styles.value}>{stockRows.length}</Text>
+            Tables totales : <Text style={styles.value}>{summary.tablesTotal}</Text>
           </Text>
           <Text style={styles.rowText}>
-            Alertes stock bas : <Text style={styles.value}>{lowStockCount}</Text>
+            Tables libres : <Text style={styles.value}>{summary.tablesFree}</Text>
           </Text>
           <Text style={styles.rowText}>
-            Écarts de shift récents : <Text style={styles.value}>{shiftDiscrepancies.length}</Text>
+            Tables occupées : <Text style={styles.value}>{summary.tablesBusy}</Text>
+          </Text>
+          <Text style={styles.rowText}>
+            Tables non affectées : <Text style={styles.value}>{summary.unassigned}</Text>
+          </Text>
+          <Text style={styles.rowText}>
+            Tables à prendre : <Text style={styles.value}>{summary.assignedWithoutOrder}</Text>
+          </Text>
+          <Text style={styles.rowText}>
+            Commandes envoyées : <Text style={styles.value}>{summary.sent}</Text>
+          </Text>
+          <Text style={styles.rowText}>
+            Argent reçu : <Text style={styles.value}>{summary.collected}</Text>
           </Text>
           <Text style={styles.rowText}>
             Dernier rafraîchissement : <Text style={styles.value}>{lastRefreshLabel}</Text>
@@ -144,91 +330,192 @@ export default function StockistScreen() {
             disabled={isRefreshing}
           >
             <Text style={styles.refreshButtonText}>
-              {isRefreshing ? 'Rafraîchissement...' : 'Rafraîchir le stock'}
+              {isRefreshing ? 'Rafraîchissement...' : 'Rafraîchir la supervision'}
             </Text>
           </Pressable>
         </View>
 
-        <Text style={styles.sectionTitle}>Écarts de shift récents</Text>
+        <Text style={styles.sectionTitle}>Vue par serveuse</Text>
 
-        {shiftDiscrepancies.length === 0 ? (
-          <Text style={styles.emptyText}>Aucun écart de shift enregistré.</Text>
+        {serverOverview.length === 0 ? (
+          <Text style={styles.emptyText}>Aucune serveuse active disponible.</Text>
         ) : (
-          shiftDiscrepancies.map((item) => (
-            <View key={item.id} style={styles.stockCard}>
-              <Text style={styles.stockTitle}>{item.productName}</Text>
-              <Text style={styles.metaText}>Caissière : {item.cashierName}</Text>
-              <Text style={styles.metaText}>Attendu : {item.expectedQty}</Text>
-              <Text style={styles.metaText}>Réel : {item.actualQty}</Text>
-              <Text style={styles.metaText}>Écart : {item.difference}</Text>
-              <Text style={styles.metaText}>Date : {formatDate(item.createdAt)}</Text>
+          serverOverview.map((item) => (
+            <View key={item.serverId} style={styles.serviceCard}>
+              <Text style={styles.serviceTitle}>{item.serverName}</Text>
+              <Text style={styles.serviceMeta}>
+                Tables affectées : {item.assignedCount}
+              </Text>
+              <Text style={styles.serviceMeta}>
+                Tables avec commande en cours : {item.activeCount}
+              </Text>
+              <Text style={styles.serviceMeta}>
+                Tables à prendre : {item.idleCount}
+              </Text>
+              <Text style={styles.serviceMeta}>
+                Commandes envoyées : {item.sentCount}
+              </Text>
+              <Text style={styles.serviceMeta}>
+                Argent reçu : {item.collectedCount}
+              </Text>
             </View>
           ))
         )}
 
-        <Text style={styles.sectionTitle}>Stock actuel</Text>
+        <Text style={styles.sectionTitle}>Tables non affectées</Text>
 
-        {stockRows.length === 0 ? (
-          <Text style={styles.emptyText}>Aucun stock disponible.</Text>
+        {unassignedTables.length === 0 ? (
+          <Text style={styles.emptyText}>Toutes les tables sont affectées.</Text>
         ) : (
-          stockRows.map((stock) => (
-            <View key={stock.productId} style={styles.stockCard}>
-              <View style={styles.topRow}>
-                <Text style={styles.stockTitle}>{stock.productName}</Text>
-
-                <View
-                  style={[
-                    styles.badge,
-                    stock.isLowStock ? styles.badgeWarning : styles.badgeOk,
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.badgeText,
-                      stock.isLowStock ? styles.badgeWarningText : styles.badgeOkText,
-                    ]}
-                  >
-                    {stock.isLowStock ? 'STOCK BAS' : 'OK'}
+          unassignedTables.map((table) => (
+            <View key={table.id} style={styles.serviceCard}>
+              <View style={styles.serviceTopRow}>
+                <Text style={styles.serviceTitle}>{table.name}</Text>
+                <View style={[styles.badgeBase, styles.badgeDraft]}>
+                  <Text style={[styles.badgeBaseText, styles.badgeDraftText]}>
+                    À affecter
                   </Text>
                 </View>
               </View>
 
-              <Text style={styles.metaText}>Quantité actuelle : {stock.quantity}</Text>
+              <Text style={styles.serviceMeta}>
+                Montant : {table.activeSale?.totalAmount ?? 0} FCFA
+              </Text>
 
-              <View style={styles.adjustRow}>
-                <Pressable
-                  style={styles.minusButton}
-                  onPress={() => handleAdjustStock(stock.productId, -1)}
-                >
-                  <Text style={styles.adjustButtonText}>-1</Text>
-                </Pressable>
-
-                <Pressable
-                  style={styles.plusButton}
-                  onPress={() => handleAdjustStock(stock.productId, 1)}
-                >
-                  <Text style={styles.adjustButtonText}>+1</Text>
-                </Pressable>
-              </View>
+              <Pressable
+                style={styles.assignButton}
+                onPress={() => cycleAssignment(table.id)}
+              >
+                <Text style={styles.assignButtonText}>Affecter une serveuse</Text>
+              </Pressable>
             </View>
           ))
         )}
 
-        <Text style={styles.sectionTitle}>Mouvements récents</Text>
+        <Text style={styles.sectionTitle}>Tables à prendre</Text>
 
-        {stockMovements.length === 0 ? (
-          <Text style={styles.emptyText}>Aucun mouvement de stock enregistré.</Text>
+        {assignedWithoutOrder.length === 0 ? (
+          <Text style={styles.emptyText}>Aucune table en attente de prise.</Text>
         ) : (
-          stockMovements.map((movement) => (
-            <View key={movement.id} style={styles.stockCard}>
-              <Text style={styles.stockTitle}>{movement.productName}</Text>
-              <Text style={styles.metaText}>Variation : {movement.quantityDelta}</Text>
-              <Text style={styles.metaText}>Raison : {movement.reason}</Text>
-              <Text style={styles.metaText}>Vente : {movement.saleId || '—'}</Text>
-              <Text style={styles.metaText}>Shift : {movement.shiftId || '—'}</Text>
-              <Text style={styles.metaText}>Date : {formatDate(movement.createdAt)}</Text>
+          assignedWithoutOrder.map((table) => (
+            <View key={table.id} style={styles.serviceCard}>
+              <View style={styles.serviceTopRow}>
+                <Text style={styles.serviceTitle}>{table.name}</Text>
+                <View style={[styles.badgeBase, styles.badgeToTake]}>
+                  <Text style={[styles.badgeBaseText, styles.badgeToTakeText]}>
+                    À prendre
+                  </Text>
+                </View>
+              </View>
+
+              <Text style={styles.serviceMeta}>
+                Serveuse affectée : {getServerName(table.assignedServerId)}
+              </Text>
+
+              <Pressable
+                style={styles.assignButton}
+                onPress={() => cycleAssignment(table.id)}
+              >
+                <Text style={styles.assignButtonText}>Changer l’affectation</Text>
+              </Pressable>
             </View>
           ))
+        )}
+
+        <Text style={styles.sectionTitle}>Toutes les tables</Text>
+
+        {tableOverview.length === 0 ? (
+          <Text style={styles.emptyText}>Aucune table disponible.</Text>
+        ) : (
+          tableOverview.map((table) => {
+            const badge = getStatusBadge(table);
+
+            return (
+              <View key={table.id} style={styles.serviceCard}>
+                <View style={styles.serviceTopRow}>
+                  <Text style={styles.serviceTitle}>{table.name}</Text>
+                  <View style={[styles.badgeBase, badge.container]}>
+                    <Text style={[styles.badgeBaseText, badge.text]}>
+                      {badge.label}
+                    </Text>
+                  </View>
+                </View>
+
+                <Text style={styles.serviceMeta}>
+                  Serveuse affectée : {getServerName(table.assignedServerId)}
+                </Text>
+                <Text style={styles.serviceMeta}>
+                  Serveuse sur commande : {getServerName(table.activeSale?.serverId)}
+                </Text>
+                <Text style={styles.serviceMeta}>
+                  Montant : {table.activeSale?.totalAmount ?? 0} FCFA
+                </Text>
+
+                <Pressable
+                  style={styles.assignButton}
+                  onPress={() => cycleAssignment(table.id)}
+                >
+                  <Text style={styles.assignButtonText}>Changer l’affectation</Text>
+                </Pressable>
+
+                <Text style={styles.assignHint}>
+                  Appuie plusieurs fois pour faire défiler les serveuses, puis aucune.
+                </Text>
+              </View>
+            );
+          })
+        )}
+
+        <Text style={styles.sectionTitle}>Commandes en cours</Text>
+
+        {liveSales.length === 0 ? (
+          <Text style={styles.emptyText}>Aucune commande active.</Text>
+        ) : (
+          liveSales.map((sale) => {
+            const badge =
+              sale.status === 'SENT'
+                ? {
+                    container: styles.badgeSent,
+                    text: styles.badgeSentText,
+                    label: 'Envoyée',
+                  }
+                : sale.status === 'MONEY_COLLECTED'
+                ? {
+                    container: styles.badgeCollected,
+                    text: styles.badgeCollectedText,
+                    label: 'Argent reçu',
+                  }
+                : {
+                    container: styles.badgeDraft,
+                    text: styles.badgeDraftText,
+                    label: sale.status,
+                  };
+
+            return (
+              <View key={sale.id} style={styles.serviceCard}>
+                <View style={styles.serviceTopRow}>
+                  <Text style={styles.serviceTitle}>
+                    {sale.sourceLabel || 'Commande'}
+                  </Text>
+                  <View style={[styles.badgeBase, badge.container]}>
+                    <Text style={[styles.badgeBaseText, badge.text]}>
+                      {badge.label}
+                    </Text>
+                  </View>
+                </View>
+
+                <Text style={styles.serviceMeta}>
+                  Serveuse : {getServerName(sale.serverId)}
+                </Text>
+                <Text style={styles.serviceMeta}>
+                  Montant : {sale.totalAmount} FCFA
+                </Text>
+                <Text style={styles.serviceMeta}>
+                  Créée : {formatDate(sale.createdAt)}
+                </Text>
+              </View>
+            );
+          })
         )}
       </ScrollView>
     </SafeAreaView>
@@ -325,7 +612,11 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#111827',
   },
-  stockCard: {
+  emptyText: {
+    marginTop: 12,
+    color: '#6b7280',
+  },
+  serviceCard: {
     marginTop: 12,
     backgroundColor: '#ffffff',
     borderRadius: 14,
@@ -333,70 +624,77 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#e5e7eb',
   },
-  topRow: {
+  serviceTopRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
   },
-  stockTitle: {
+  serviceTitle: {
     flex: 1,
     marginRight: 10,
     fontSize: 16,
     fontWeight: '800',
     color: '#111827',
   },
-  metaText: {
+  serviceMeta: {
     marginTop: 6,
     fontSize: 14,
     color: '#4b5563',
   },
-  badge: {
+  assignButton: {
+    marginTop: 12,
+    backgroundColor: '#eef2ff',
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  assignButtonText: {
+    color: '#3730a3',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  assignHint: {
+    marginTop: 8,
+    fontSize: 12,
+    color: '#6b7280',
+  },
+  badgeBase: {
     borderRadius: 999,
     paddingHorizontal: 10,
     paddingVertical: 6,
   },
-  badgeText: {
+  badgeBaseText: {
     fontSize: 12,
     fontWeight: '800',
   },
-  badgeOk: {
+  badgeFree: {
     backgroundColor: '#dcfce7',
   },
-  badgeOkText: {
+  badgeFreeText: {
     color: '#166534',
   },
-  badgeWarning: {
+  badgeDraft: {
+    backgroundColor: '#e5e7eb',
+  },
+  badgeDraftText: {
+    color: '#374151',
+  },
+  badgeSent: {
+    backgroundColor: '#dbeafe',
+  },
+  badgeSentText: {
+    color: '#1d4ed8',
+  },
+  badgeCollected: {
     backgroundColor: '#fef3c7',
   },
-  badgeWarningText: {
+  badgeCollectedText: {
     color: '#92400e',
   },
-  adjustRow: {
-    flexDirection: 'row',
-    gap: 12,
-    marginTop: 14,
+  badgeToTake: {
+    backgroundColor: '#ede9fe',
   },
-  minusButton: {
-    flex: 1,
-    backgroundColor: '#fee2e2',
-    borderRadius: 12,
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  plusButton: {
-    flex: 1,
-    backgroundColor: '#dcfce7',
-    borderRadius: 12,
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  adjustButtonText: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: '#111827',
-  },
-  emptyText: {
-    marginTop: 12,
-    color: '#6b7280',
+  badgeToTakeText: {
+    color: '#6d28d9',
   },
 });

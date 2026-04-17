@@ -51,7 +51,7 @@ function getRoleLabel(role: AppUser['role']) {
     case 'admin':
       return 'Administrateur';
     case 'stockist':
-      return 'Stockiste';
+      return 'Chef de salle';
     default:
       return role;
   }

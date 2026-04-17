@@ -20,3 +20,10 @@ export type EstablishmentMode =
   | 'room_with_tables'
   | 'room_without_tables'
   | 'mixed';
+
+export type TableAssignment = {
+  id: string;
+  tableId: string;
+  serverUserId: string;
+  assignedAt: string;
+};
